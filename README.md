@@ -1,2 +1,22 @@
 # pmos-google-nativehusky
-parser for hardware 
+parser for hardware
+
+## Downloadable bundle zip
+
+Create a zip with all tracked repository files plus every HTTP(S) link referenced by those files:
+
+```bash
+python3 scripts/create_repo_bundle_zip.py
+```
+
+The zip is written to `dist/repo-and-links.zip`.
+
+A GitHub Actions workflow (`Repository Bundle Zip`) also uploads the same zip as a downloadable artifact on pushes and manual runs:
+
+- https://github.com/mikethi/pmos-google-nativehusky/actions/workflows/repo-bundle.yml
+
+## License requirements for bundled content
+
+- This repository currently declares package licensing metadata as `MIT` in `device/google-husky/APKBUILD`.
+- Files downloaded from external links are third-party content and may have different licenses.
+- Before redistributing `dist/repo-and-links.zip`, review `linked_files_manifest.json` in the archive and comply with each linked source's license terms.
