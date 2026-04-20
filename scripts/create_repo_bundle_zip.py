@@ -25,7 +25,7 @@ def git_tracked_files(repo_root: Path) -> list[Path]:
         check=True,
         capture_output=True,
     )
-    files = [Path(item.decode("utf-8")) for item in result.stdout.split(b"\0") if item]
+    files = [Path(item.decode("utf-8", errors="surrogateescape")) for item in result.stdout.split(b"\0") if item]
     return files
 
 
@@ -71,8 +71,13 @@ def download_links(url_locations: dict[str, list[str]], destination: Path) -> li
             request = urllib.request.Request(url, headers={"User-Agent": "repo-bundle-zip/1.0"})
             with urllib.request.urlopen(request, timeout=30) as response:
                 content_length = response.headers.get("Content-Length")
-                if content_length is not None and int(content_length) > MAX_DOWNLOAD_BYTES:
-                    raise ValueError(f"content-length exceeds {MAX_DOWNLOAD_BYTES} bytes")
+                if content_length is not None:
+                    try:
+                        content_length_value = int(content_length)
+                    except ValueError as error:
+                        raise ValueError(f"invalid content-length header: {content_length}") from error
+                    if content_length_value > MAX_DOWNLOAD_BYTES:
+                        raise ValueError(f"content-length exceeds {MAX_DOWNLOAD_BYTES} bytes")
 
                 chunks: list[bytes] = []
                 total_bytes = 0
