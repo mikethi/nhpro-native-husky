@@ -1,0 +1,26 @@
+name: Repository Bundle Zip
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+      - copilot/**
+
+jobs:
+  build-bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build bundle zip
+        run: python3 scripts/create_repo_bundle_zip.py
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-and-links
+          path: dist/repo-and-links.zip
+          if-no-files-found: error
