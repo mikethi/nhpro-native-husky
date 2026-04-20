@@ -9,11 +9,13 @@ import subprocess
 import sys
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
 
 URL_PATTERN = re.compile(r"https?://[^\s<>)\"]+")
+MAX_DOWNLOAD_BYTES = 10 * 1024 * 1024
 
 
 def git_tracked_files(repo_root: Path) -> list[Path]:
@@ -50,7 +52,12 @@ def download_links(url_locations: dict[str, list[str]], destination: Path) -> li
     results: list[dict[str, object]] = []
 
     for index, (url, referenced_by) in enumerate(url_locations.items(), start=1):
-        file_name = safe_path_component(url.replace("https://", "").replace("http://", ""))
+        parsed = urllib.parse.urlparse(url)
+        file_name = safe_path_component(
+            "_".join(part for part in [parsed.netloc, parsed.path.strip("/"), parsed.query] if part)
+            or parsed.netloc
+            or "linked-resource"
+        )
         download_name = f"{index:03d}_{file_name}"
         target_path = destination / download_name
 
@@ -61,12 +68,27 @@ def download_links(url_locations: dict[str, list[str]], destination: Path) -> li
         }
 
         try:
-            with urllib.request.urlopen(url, timeout=30) as response:
-                data = response.read()
+            request = urllib.request.Request(url, headers={"User-Agent": "repo-bundle-zip/1.0"})
+            with urllib.request.urlopen(request, timeout=30) as response:
+                content_length = response.headers.get("Content-Length")
+                if content_length is not None and int(content_length) > MAX_DOWNLOAD_BYTES:
+                    raise ValueError(f"content-length exceeds {MAX_DOWNLOAD_BYTES} bytes")
+
+                chunks: list[bytes] = []
+                total_bytes = 0
+                while True:
+                    chunk = response.read(8192)
+                    if not chunk:
+                        break
+                    total_bytes += len(chunk)
+                    if total_bytes > MAX_DOWNLOAD_BYTES:
+                        raise ValueError(f"download exceeds {MAX_DOWNLOAD_BYTES} bytes")
+                    chunks.append(chunk)
+                data = b"".join(chunks)
             target_path.write_bytes(data)
             record["status"] = "downloaded"
             record["bytes"] = len(data)
-        except (urllib.error.URLError, TimeoutError, OSError) as error:
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
             record["status"] = "failed"
             record["error"] = str(error)
 
