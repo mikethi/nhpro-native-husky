@@ -1,0 +1,36 @@
+# Reference: <https://postmarketos.org/devicepkg>
+# Maintainer: Your Name <your@email.com>
+
+pkgname=device-google-husky
+pkgver=1
+pkgrel=0
+pkgdesc="Google Pixel 8 Pro (husky) – bare-metal postmarketOS device package"
+url="https://postmarketos.org"
+arch="aarch64"
+license="MIT"
+depends="
+	postmarketos-base
+	linux-google-husky
+"
+makedepends="devicepkg-dev"
+subpackages="$pkgname-nonfree-firmware:nonfree_firmware"
+source="deviceinfo"
+
+build() {
+	devicepkg_build $startdir $pkgname
+}
+
+package() {
+	devicepkg_package $startdir $pkgname
+}
+
+nonfree_firmware() {
+	pkgdesc="Google Pixel 8 Pro (husky) firmware blobs (non-free)"
+	# Populate once firmware-google-husky is packaged separately
+	depends=""
+	mkdir "$subpkgdir"
+}
+
+sha512sums="
+SKIP  deviceinfo
+"

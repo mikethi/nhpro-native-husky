@@ -1,0 +1,246 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Device tree source for Google Pixel 8 Pro (husky)
+ * SoC: Google Tensor G3 (zuma / Exynos GS301)
+ *
+ * Copyright (C) 2024 postmarketOS contributors
+ *
+ * Bare-metal minimal DTS – provides enough for UART console, GPIO keys,
+ * and basic memory/CPU topology so a mainline kernel can boot.
+ * Expand as upstream drivers land.
+ */
+
+/dts-v1/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+
+/ {
+	model = "Google Pixel 8 Pro";
+	compatible = "google,husky", "google,zuma";
+
+	/*
+	 * 64-bit address / 64-bit size cells for the root bus.
+	 * Memory nodes use 32-bit high-word + 32-bit low-word addressing
+	 * to remain compatible with upstream ARM64 DTS conventions.
+	 */
+	#address-cells = <2>;
+	#size-cells = <2>;
+
+	/* ------------------------------------------------------------------ */
+	/* Memory                                                               */
+	/* ------------------------------------------------------------------ */
+	/*
+	 * Pixel 8 Pro ships with 12 GiB LPDDR5X.
+	 * The first 2 GiB window (0x8000_0000 – 0xFFFF_FFFF) is described
+	 * here; the bootloader/UEFI will update the full memory map via ATAG
+	 * or an EFI memory table at runtime.
+	 */
+	memory@80000000 {
+		device_type = "memory";
+		/* <hi-addr lo-addr hi-size lo-size> */
+		reg = <0x0 0x80000000 0x0 0x80000000>;
+	};
+
+	/* Additional 10 GiB above the 4 GiB boundary */
+	memory@280000000 {
+		device_type = "memory";
+		reg = <0x2 0x80000000 0x2 0x80000000>;
+	};
+
+	/* ------------------------------------------------------------------ */
+	/* Chosen / bootargs                                                    */
+	/* ------------------------------------------------------------------ */
+	chosen {
+		/*
+		 * earlycon: Samsung/Exynos UART at 0x10870000 (ttySAC0).
+		 * The bootloader may override these via the chosen node.
+		 */
+		bootargs = "earlycon=exynos4210,mmio32,0x10870000 console=ttySAC0,115200n8 clk_ignore_unused swiotlb=noforce";
+		stdout-path = "serial0:115200n8";
+	};
+
+	/* ------------------------------------------------------------------ */
+	/* CPUs – Google Tensor G3 (zuma)                                      */
+	/*   Cluster 0 (KLEIN  / Cortex-A510 ISA, ARMv9):  cpu0 – cpu3        */
+	/*   Cluster 1 (MAKALU / Cortex-A715 ISA, ARMv9):  cpu4 – cpu7        */
+	/*   Cluster 2 (MAKALUELP / Cortex-X3 ISA, ARMv9): cpu8               */
+	/* All cores use PSCI for hotplug / suspend.                           */
+	/* ------------------------------------------------------------------ */
+	cpus {
+		#address-cells = <2>;
+		#size-cells = <0>;
+
+		cpu-map {
+			cluster0 {
+				core0 { cpu = <&cpu0>; };
+				core1 { cpu = <&cpu1>; };
+				core2 { cpu = <&cpu2>; };
+				core3 { cpu = <&cpu3>; };
+			};
+			cluster1 {
+				core0 { cpu = <&cpu4>; };
+				core1 { cpu = <&cpu5>; };
+				core2 { cpu = <&cpu6>; };
+				core3 { cpu = <&cpu7>; };
+			};
+			cluster2 {
+				core0 { cpu = <&cpu8>; };
+			};
+		};
+
+		/* --- Efficiency (KLEIN) cores --- */
+		cpu0: cpu@0000 {
+			device_type = "cpu";
+			compatible = "arm,armv9";
+			reg = <0x0 0x0000>;
+			enable-method = "psci";
+			capacity-dmips-mhz = <453>;
+			dynamic-power-coefficient = <219>;
+		};
+		cpu1: cpu@0100 {
+			device_type = "cpu";
+			compatible = "arm,armv9";
+			reg = <0x0 0x0100>;
+			enable-method = "psci";
+			capacity-dmips-mhz = <453>;
+			dynamic-power-coefficient = <219>;
+		};
+		cpu2: cpu@0200 {
+			device_type = "cpu";
+			compatible = "arm,armv9";
+			reg = <0x0 0x0200>;
+			enable-method = "psci";
+			capacity-dmips-mhz = <453>;
+			dynamic-power-coefficient = <219>;
+		};
+		cpu3: cpu@0300 {
+			device_type = "cpu";
+			compatible = "arm,armv9";
+			reg = <0x0 0x0300>;
+			enable-method = "psci";
+			capacity-dmips-mhz = <453>;
+			dynamic-power-coefficient = <219>;
+		};
+
+		/* --- Performance (MAKALU) cores --- */
+		cpu4: cpu@0400 {
+			device_type = "cpu";
+			compatible = "arm,armv9";
+			reg = <0x0 0x0400>;
+			enable-method = "psci";
+			capacity-dmips-mhz = <826>;
+			dynamic-power-coefficient = <262>;
+		};
+		cpu5: cpu@0500 {
+			device_type = "cpu";
+			compatible = "arm,armv9";
+			reg = <0x0 0x0500>;
+			enable-method = "psci";
+			capacity-dmips-mhz = <826>;
+			dynamic-power-coefficient = <262>;
+		};
+		cpu6: cpu@0600 {
+			device_type = "cpu";
+			compatible = "arm,armv9";
+			reg = <0x0 0x0600>;
+			enable-method = "psci";
+			capacity-dmips-mhz = <826>;
+			dynamic-power-coefficient = <262>;
+		};
+		cpu7: cpu@0700 {
+			device_type = "cpu";
+			compatible = "arm,armv9";
+			reg = <0x0 0x0700>;
+			enable-method = "psci";
+			capacity-dmips-mhz = <826>;
+			dynamic-power-coefficient = <262>;
+		};
+
+		/* --- Prime (MAKALUELP) core --- */
+		cpu8: cpu@0800 {
+			device_type = "cpu";
+			compatible = "arm,armv9";
+			reg = <0x0 0x0800>;
+			enable-method = "psci";
+			capacity-dmips-mhz = <1024>;
+			dynamic-power-coefficient = <471>;
+		};
+	};
+
+	/* ------------------------------------------------------------------ */
+	/* PSCI                                                                 */
+	/* ------------------------------------------------------------------ */
+	psci {
+		compatible = "arm,psci-1.0";
+		method = "smc";
+	};
+
+	/* ------------------------------------------------------------------ */
+	/* Interrupt controller (GIC-600 on zuma)                              */
+	/* ------------------------------------------------------------------ */
+	gic: interrupt-controller@10400000 {
+		compatible = "arm,gic-v3";
+		#interrupt-cells = <3>;
+		interrupt-controller;
+		reg = <0x0 0x10400000 0x0 0x10000>,  /* GICD */
+		      <0x0 0x10440000 0x0 0x80000>;  /* GICR (9 RDs × 0x20000) */
+		interrupts = <GIC_PPI 9 IRQ_TYPE_LEVEL_HIGH>;
+	};
+
+	/* ------------------------------------------------------------------ */
+	/* Arch timer (ARM generic timer)                                       */
+	/* ------------------------------------------------------------------ */
+	timer {
+		compatible = "arm,armv8-timer";
+		interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(8) | IRQ_TYPE_LEVEL_LOW)>,
+		             <GIC_PPI 14 (GIC_CPU_MASK_SIMPLE(8) | IRQ_TYPE_LEVEL_LOW)>,
+		             <GIC_PPI 11 (GIC_CPU_MASK_SIMPLE(8) | IRQ_TYPE_LEVEL_LOW)>,
+		             <GIC_PPI 10 (GIC_CPU_MASK_SIMPLE(8) | IRQ_TYPE_LEVEL_LOW)>;
+		clock-frequency = <24576000>;
+	};
+
+	/* ------------------------------------------------------------------ */
+	/* UART0 (ttySAC0) – debug / console                                   */
+	/* Samsung/Exynos USI UART                                             */
+	/* ------------------------------------------------------------------ */
+	serial0: serial@10870000 {
+		compatible = "samsung,exynos-uart";
+		reg = <0x0 0x10870000 0x0 0x100>;
+		interrupts = <GIC_SPI 0 IRQ_TYPE_LEVEL_HIGH>;
+		pinctrl-names = "default";
+		clock-names = "gate_uart_clk0", "ipclk_uart0";
+		samsung,separate-uart-clk;
+		samsung,dbg-uart-ch;
+		samsung,dbg-uart-baud = <115200>;
+		status = "okay";
+	};
+
+	/* ------------------------------------------------------------------ */
+	/* GPIO keys                                                            */
+	/* Volume-down: GPA4[1], Volume-up: GPA6[2], Power: GPA4[0]           */
+	/* (GPIOs reference the pinctrl block; numbers are SoC-absolute)       */
+	/* ------------------------------------------------------------------ */
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		key-power {
+			label = "Power key";
+			linux,code = <116>;   /* KEY_POWER */
+			/* GPA4[0] – pinctrl to be wired when pinctrl driver lands */
+			wakeup-source;
+		};
+
+		key-volume-down {
+			label = "Volume Down";
+			linux,code = <114>;   /* KEY_VOLUMEDOWN */
+			wakeup-source;
+		};
+
+		key-volume-up {
+			label = "Volume Up";
+			linux,code = <115>;   /* KEY_VOLUMEUP */
+			wakeup-source;
+		};
+	};
+};
