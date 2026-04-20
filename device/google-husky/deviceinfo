@@ -1,0 +1,36 @@
+# Reference: <https://postmarketos.org/deviceinfo>
+# Kernel: <https://postmarketos.org/devicekernel>
+# Maintainer: Your Name <your@email.com>
+# Co-Maintainer: Your Co-Maintainer <co@email.com>
+
+deviceinfo_format_version="0"
+deviceinfo_name="Google Pixel 8 Pro"
+deviceinfo_manufacturer="Google"
+deviceinfo_date="2023-10-04"
+deviceinfo_dtb="google/husky"
+deviceinfo_modules_initfs=""
+deviceinfo_external_disk="false"
+deviceinfo_flash_method="fastboot"
+deviceinfo_arch="aarch64"
+
+# Bootloader / kernel command line
+# UART0 (ttySAC0) is at 0x10870000 on the zuma SoC
+deviceinfo_kernel_cmdline="earlycon=exynos4210,mmio32,0x10870000 console=ttySAC0,115200n8 clk_ignore_unused swiotlb=noforce androidboot.hardware=zuma"
+
+# Boot image (standard Pixel A/B partition scheme, boot header v4)
+deviceinfo_generate_bootimg="true"
+deviceinfo_bootimg_qcdt="false"
+deviceinfo_bootimg_mtk_mkimage="false"
+deviceinfo_bootimg_dtb_second="false"
+deviceinfo_bootimg_header_version="4"
+deviceinfo_bootimg_pagesize="2048"
+deviceinfo_bootimg_base="0x01000000"
+deviceinfo_bootimg_kernel_offset="0x00008000"
+deviceinfo_bootimg_ramdisk_offset="0x01000000"
+deviceinfo_bootimg_tags_offset="0x00000100"
+deviceinfo_bootimg_dtb_offset="0x01f00000"
+
+# Display
+# 6.7" LTPO OLED, 1344×2992, 489 ppi, 120 Hz
+deviceinfo_screen_width="1344"
+deviceinfo_screen_height="2992"
