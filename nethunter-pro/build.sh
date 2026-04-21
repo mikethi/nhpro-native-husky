@@ -152,6 +152,10 @@ ensure_docker_running() {
   # Returns 0 only when the daemon is reachable AND reports a known OS type.
   # The Docker CLI checks ServerInfo.OSType before every `docker run`; if it is
   # empty or unrecognised the run fails with "unknown server OS:".
+  local DOCKER_UNIX_SOCK="unix:///var/run/docker.sock"
+  # Maximum one-second polling iterations while waiting for dockerd to start.
+  local DOCKER_START_RETRIES=10
+
   _docker_os_ok() {
     local os
     os="$(docker info --format '{{.OSType}}' 2>/dev/null)" || return 1
@@ -169,9 +173,9 @@ ensure_docker_running() {
     # socket.  Try the local Unix socket first before attempting to start a
     # native daemon – this handles the "Desktop running but wrong context"
     # case without needing sudo.
-    if DOCKER_HOST=unix:///var/run/docker.sock _docker_os_ok 2>/dev/null; then
-      export DOCKER_HOST=unix:///var/run/docker.sock
-      echo "[+] Using native Docker socket (/var/run/docker.sock)."
+    if DOCKER_HOST="${DOCKER_UNIX_SOCK}" _docker_os_ok 2>/dev/null; then
+      export DOCKER_HOST="${DOCKER_UNIX_SOCK}"
+      echo "[+] Using native Docker socket (${DOCKER_UNIX_SOCK})."
       return 0
     fi
 
@@ -181,16 +185,15 @@ ensure_docker_running() {
     sudo service containerd start >/dev/null 2>&1 || true
     sudo service docker start >/dev/null 2>&1 || true
 
-    local retries=10
-    for _ in $(seq 1 "${retries}"); do
+    for _ in $(seq 1 "${DOCKER_START_RETRIES}"); do
       sleep 1
       if _docker_os_ok; then
         echo "[+] Docker daemon started successfully."
         return 0
       fi
-      if DOCKER_HOST=unix:///var/run/docker.sock _docker_os_ok 2>/dev/null; then
-        export DOCKER_HOST=unix:///var/run/docker.sock
-        echo "[+] Docker daemon started (using /var/run/docker.sock)."
+      if DOCKER_HOST="${DOCKER_UNIX_SOCK}" _docker_os_ok 2>/dev/null; then
+        export DOCKER_HOST="${DOCKER_UNIX_SOCK}"
+        echo "[+] Docker daemon started (using ${DOCKER_UNIX_SOCK})."
         return 0
       fi
     done
