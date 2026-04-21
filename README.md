@@ -37,7 +37,11 @@
    ```bash
    fastboot flashing unlock
    ```
-5. Flash generated images:
+5. Find the generated version string (`<VERSION>`) from your build output filenames:
+   ```bash
+   ls -1 nethunterpro-*-husky-phosh*.img
+   ```
+6. Flash generated images:
    ```bash
    fastboot flash boot nethunterpro-<VERSION>-husky-phosh-boot.img
    fastboot flash userdata nethunterpro-<VERSION>-husky-phosh.img
@@ -76,7 +80,11 @@
    ```bash
    fastboot flashing unlock
    ```
-5. Flash generated images:
+5. Find the generated version string (`<VERSION>`) from your build output filenames:
+   ```bash
+   ls -1 nethunterpro-*-husky-phosh*.img
+   ```
+6. Flash generated images:
    ```bash
    fastboot flash boot nethunterpro-<VERSION>-husky-phosh-boot.img
    fastboot flash userdata nethunterpro-<VERSION>-husky-phosh.img
