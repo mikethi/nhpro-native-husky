@@ -39,9 +39,10 @@
    ```
 5. Extract the generated version string (`<VERSION>`) from your build output filenames:
    ```bash
-   VERSION="$(ls -1 nethunterpro-*-husky-phosh-boot.img | sed -E 's#nethunterpro-(.*)-husky-phosh-boot.img#\1#')"
+   VERSION="$(ls -1t nethunterpro-*-husky-phosh-boot.img | head -n1 | sed -E 's#nethunterpro-(.*)-husky-phosh-boot.img#\1#')"
    echo "$VERSION"
    ```
+   If you have multiple builds, this selects the most recent boot image.
 6. Flash generated images:
    ```bash
    fastboot flash boot nethunterpro-${VERSION}-husky-phosh-boot.img
@@ -83,9 +84,10 @@
    ```
 5. Extract the generated version string (`<VERSION>`) from your build output filenames:
    ```bash
-   VERSION="$(ls -1 nethunterpro-*-husky-phosh-boot.img | sed -E 's#nethunterpro-(.*)-husky-phosh-boot.img#\1#')"
+   VERSION="$(ls -1t nethunterpro-*-husky-phosh-boot.img | head -n1 | sed -E 's#nethunterpro-(.*)-husky-phosh-boot.img#\1#')"
    echo "$VERSION"
    ```
+   If you have multiple builds, this selects the most recent boot image.
 6. Flash generated images:
    ```bash
    fastboot flash boot nethunterpro-${VERSION}-husky-phosh-boot.img
@@ -114,17 +116,18 @@
    ```
 2. Prepare a local `pmaports` checkout:
    ```bash
-   git clone https://gitlab.postmarketos.org/postmarketOS/pmaports.git
+   PMAPORTS="$HOME/pmaports"
+   git clone https://gitlab.postmarketos.org/postmarketOS/pmaports.git "$PMAPORTS"
    ```
 3. Clone this repository and copy its `google-husky` device tree into your local `pmaports`:
    ```bash
    git clone https://github.com/mikethi/nhpro-native-husky.git
-   cp -r nhpro-native-husky/device/google-husky /path/to/pmaports/device/
+   cp -r nhpro-native-husky/device/google-husky "$PMAPORTS/device/"
    ```
 4. Initialize and build/install for `google-husky` with your local `pmaports`:
    ```bash
-   pmbootstrap --aports /path/to/pmaports init
-   pmbootstrap --aports /path/to/pmaports install
+   pmbootstrap --aports "$PMAPORTS" init
+   pmbootstrap --aports "$PMAPORTS" install
    ```
 5. Boot the phone to fastboot mode.
 6. Flash generated images using the current `google-husky` instructions from the device wiki page above.
