@@ -182,8 +182,10 @@ ensure_docker_running() {
     # Daemon not reachable at all – try starting it.
     echo "[+] WSL detected: Docker daemon not running – attempting to start it..."
     # containerd must be up before dockerd; starting it is a no-op if already running.
-    sudo service containerd start >/dev/null 2>&1 || true
-    sudo service docker start >/dev/null 2>&1 || true
+    # Capture stderr so any startup errors are visible if the daemon never comes up.
+    local containerd_err docker_err
+    containerd_err="$(sudo service containerd start 2>&1)" || true
+    docker_err="$(sudo service docker start 2>&1)" || true
 
     for _ in $(seq 1 "${DOCKER_START_RETRIES}"); do
       sleep 1
@@ -199,6 +201,8 @@ ensure_docker_running() {
     done
 
     echo "[!] Docker daemon is not reachable in WSL." >&2
+    [ -n "${containerd_err}" ] && echo "[!]   containerd: ${containerd_err}" >&2
+    [ -n "${docker_err}" ]     && echo "[!]   dockerd:    ${docker_err}" >&2
     echo "[!]   Using Docker Desktop for Windows?" >&2
     echo "[!]     1. Start Docker Desktop on Windows." >&2
     echo "[!]     2. In Settings → Resources → WSL Integration, enable your Kali distro." >&2
@@ -216,8 +220,12 @@ if [ "${use_docker}" ]; then
 
   DOCKER_KVM_ARG=""
   DOCKER_SERVER_OS=""
-  if ! DOCKER_SERVER_OS="$(docker version --format '{{.Server.Os}}' 2>/dev/null)"; then
-    echo "[!] Warning: unable to query Docker server OS; skipping /dev/kvm passthrough."
+  if DOCKER_SERVER_OS="$(docker version --format '{{.Server.Os}}' 2>/dev/null)"; then
+    if [ -z "${DOCKER_SERVER_OS}" ]; then
+      echo "[!] Warning: Docker server did not report its OS; skipping /dev/kvm passthrough."
+    fi
+  else
+    echo "[!] Warning: could not query Docker server version; skipping /dev/kvm passthrough."
   fi
   if [ -e /dev/kvm ] && [ "${DOCKER_SERVER_OS}" = "linux" ]; then
     DOCKER_KVM_ARG="--device /dev/kvm"
