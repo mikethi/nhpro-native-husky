@@ -40,6 +40,7 @@
 5. Extract the generated version string (`<VERSION>`) from your build output filenames:
    ```bash
    VERSION="$(ls -1t nethunterpro-*-husky-phosh-boot.img | head -n1 | sed -E 's#nethunterpro-(.*)-husky-phosh-boot.img#\1#')"
+   [ -n "$VERSION" ] || { echo "No generated NetHunter image files found."; exit 1; }
    echo "$VERSION"
    ```
    If you have multiple builds, this selects the most recent boot image.
@@ -85,6 +86,7 @@
 5. Extract the generated version string (`<VERSION>`) from your build output filenames:
    ```bash
    VERSION="$(ls -1t nethunterpro-*-husky-phosh-boot.img | head -n1 | sed -E 's#nethunterpro-(.*)-husky-phosh-boot.img#\1#')"
+   [ -n "$VERSION" ] || { echo "No generated NetHunter image files found."; exit 1; }
    echo "$VERSION"
    ```
    If you have multiple builds, this selects the most recent boot image.
@@ -116,7 +118,7 @@
    ```
 2. Prepare a local `pmaports` checkout:
    ```bash
-   PMAPORTS="$HOME/pmaports"
+   PMAPORTS="$HOME/pmaports-husky"
    git clone https://gitlab.postmarketos.org/postmarketOS/pmaports.git "$PMAPORTS"
    ```
 3. Clone this repository and copy its `google-husky` device tree into your local `pmaports`:
