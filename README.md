@@ -1,5 +1,8 @@
 # pmos-google-nativehusky
-parser for hardware
+
+**Google Pixel 8 Pro (husky) — postmarketOS & Kali NetHunter, full native kernel hardware control (no HAL)**
+
+→ **[HARDWARE_SPECS.md](HARDWARE_SPECS.md)** — complete hardware table: every component on the Pixel 8 Pro with its driver module name, kernel interface, Sultan kernel source link, firmware path, and mainline kernel equivalent.
 
 ## Downloadable bundle zip
 
