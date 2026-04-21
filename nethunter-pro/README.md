@@ -30,7 +30,7 @@ This kernel enables all of the above interfaces on the zuma SoC without any HAL 
 ### Bare metal (Kali or Debian)
 
 ```bash
-sudo apt install git debos bmap-tools xz-utils mkbootimg fastboot
+sudo apt install git debos xz-utils mkbootimg fastboot
 ```
 
 ### Docker
@@ -99,7 +99,7 @@ Default credentials: **kali / 1234**
 | SoC | Google Tensor G3 (zuma / Exynos GS301) |
 | RAM | 12 GiB LPDDR5X |
 | Display | 6.7″ LTPO OLED 1344×2992 120 Hz |
-| Boot image | Android header v4, pagesize 2048 |
+| Boot image | Android header v4, pagesize 4096 |
 | Kernel cmdline | `earlycon=exynos4210,mmio32,0x10870000 console=ttySAC0,115200n8 clk_ignore_unused swiotlb=noforce androidboot.hardware=zuma` |
 | Flash method | `fastboot` |
 
