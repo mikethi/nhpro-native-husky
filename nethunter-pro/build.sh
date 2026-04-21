@@ -65,7 +65,7 @@ display_help() {
   exit 0
 }
 
-while getopts "dDvcszCZrR:e:H:u:p:M:m:V:f:h:x:g:" opt; do
+while getopts ":dDvcszCZrR:e:H:u:p:M:m:V:f:h:x:g:" opt; do
   case "${opt}" in
     d) use_docker=1 ;;
     D) debug=1 ;;
@@ -86,7 +86,15 @@ while getopts "dDvcszCZrR:e:H:u:p:M:m:V:f:h:x:g:" opt; do
     h) EXTRA_ARGS="${EXTRA_ARGS} -e http_proxy:${OPTARG}" ;;
     x) EXTRA_ARGS="${EXTRA_ARGS} -t debian_suite:${OPTARG}" ;;
     g) EXTRA_ARGS="${EXTRA_ARGS} -t sign:${OPTARG}" ;;
-    *) display_help ;;
+    :)
+      if [ "${OPTARG}" = "e" ]; then
+        environment="phosh"
+      else
+        echo "Option -${OPTARG} requires an argument." >&2
+        display_help
+      fi
+      ;;
+    \?) display_help ;;
   esac
 done
 
