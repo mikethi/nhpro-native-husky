@@ -149,8 +149,14 @@ ARGS="${ARGS} \
 [ "${verbose}" ]      && ARGS="${ARGS} --verbose"
 
 if [ "${use_docker}" ]; then
+  DOCKER_KVM_ARG=""
+  DOCKER_SERVER_OS="$(docker version --format '{{.Server.Os}}' 2>/dev/null || true)"
+  if [ -e /dev/kvm ] && [ "${DOCKER_SERVER_OS}" = "linux" ]; then
+    DOCKER_KVM_ARG="--device /dev/kvm"
+  fi
+
   DEBOS_CMD="docker run --rm --interactive --tty \
-    --device /dev/kvm \
+    ${DOCKER_KVM_ARG} \
     --workdir /recipes \
     --mount type=bind,source=$(pwd),destination=/recipes \
     --security-opt label=disable \
