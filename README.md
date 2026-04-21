@@ -37,14 +37,15 @@
    ```bash
    fastboot flashing unlock
    ```
-5. Find the generated version string (`<VERSION>`) from your build output filenames:
+5. Extract the generated version string (`<VERSION>`) from your build output filenames:
    ```bash
-   ls -1 nethunterpro-*-husky-phosh*.img
+   VERSION="$(ls -1 nethunterpro-*-husky-phosh-boot.img | sed -E 's#nethunterpro-(.*)-husky-phosh-boot.img#\1#')"
+   echo "$VERSION"
    ```
 6. Flash generated images:
    ```bash
-   fastboot flash boot nethunterpro-<VERSION>-husky-phosh-boot.img
-   fastboot flash userdata nethunterpro-<VERSION>-husky-phosh.img
+   fastboot flash boot nethunterpro-${VERSION}-husky-phosh-boot.img
+   fastboot flash userdata nethunterpro-${VERSION}-husky-phosh.img
    fastboot reboot
    ```
 
@@ -80,14 +81,15 @@
    ```bash
    fastboot flashing unlock
    ```
-5. Find the generated version string (`<VERSION>`) from your build output filenames:
+5. Extract the generated version string (`<VERSION>`) from your build output filenames:
    ```bash
-   ls -1 nethunterpro-*-husky-phosh*.img
+   VERSION="$(ls -1 nethunterpro-*-husky-phosh-boot.img | sed -E 's#nethunterpro-(.*)-husky-phosh-boot.img#\1#')"
+   echo "$VERSION"
    ```
 6. Flash generated images:
    ```bash
-   fastboot flash boot nethunterpro-<VERSION>-husky-phosh-boot.img
-   fastboot flash userdata nethunterpro-<VERSION>-husky-phosh.img
+   fastboot flash boot nethunterpro-${VERSION}-husky-phosh-boot.img
+   fastboot flash userdata nethunterpro-${VERSION}-husky-phosh.img
    fastboot reboot
    ```
 
@@ -114,9 +116,10 @@
    ```bash
    git clone https://gitlab.postmarketos.org/postmarketOS/pmaports.git
    ```
-3. Copy this repository's device tree into your local `pmaports`:
+3. Clone this repository and copy its `google-husky` device tree into your local `pmaports`:
    ```bash
-   cp -r /path/to/nhpro-native-husky/device/google-husky /path/to/pmaports/device/
+   git clone https://github.com/mikethi/nhpro-native-husky.git
+   cp -r nhpro-native-husky/device/google-husky /path/to/pmaports/device/
    ```
 4. Initialize and build/install for `google-husky` with your local `pmaports`:
    ```bash
