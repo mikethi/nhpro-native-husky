@@ -39,7 +39,7 @@
    ```
 5. Extract the generated version string (`<VERSION>`) from your build output filenames:
    ```bash
-   VERSION="$(ls -1t nethunterpro-*-husky-phosh-boot.img | head -n1 | sed -E 's#nethunterpro-(.*)-husky-phosh-boot.img#\1#')"
+   VERSION="$(ls -1t nethunterpro-*-husky-phosh-boot.img | head -n1 | sed -E 's/nethunterpro-(.*)-husky-phosh-boot.img/\1/')"
    [ -n "$VERSION" ] || { echo "No generated NetHunter image files found."; exit 1; }
    echo "$VERSION"
    ```
@@ -85,7 +85,7 @@
    ```
 5. Extract the generated version string (`<VERSION>`) from your build output filenames:
    ```bash
-   VERSION="$(ls -1t nethunterpro-*-husky-phosh-boot.img | head -n1 | sed -E 's#nethunterpro-(.*)-husky-phosh-boot.img#\1#')"
+   VERSION="$(ls -1t nethunterpro-*-husky-phosh-boot.img | head -n1 | sed -E 's/nethunterpro-(.*)-husky-phosh-boot.img/\1/')"
    [ -n "$VERSION" ] || { echo "No generated NetHunter image files found."; exit 1; }
    echo "$VERSION"
    ```
