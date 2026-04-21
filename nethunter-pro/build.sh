@@ -152,18 +152,18 @@ ensure_docker_running() {
   # Returns 0 only when the daemon is reachable AND reports a known OS type.
   # The Docker CLI checks ServerInfo.OSType before every `docker run`; if it is
   # empty or unrecognised the run fails with "unknown server OS:".
-  local DOCKER_UNIX_SOCK="unix:///var/run/docker.sock"
+  local docker_unix_sock="unix:///var/run/docker.sock"
   # Maximum one-second polling iterations while waiting for dockerd to start.
-  local DOCKER_START_RETRIES=10
+  local docker_start_retries=10
 
-  _docker_os_ok() {
+  check_docker_os() {
     local os
     os="$(docker info --format '{{.OSType}}' 2>/dev/null)" || return 1
     [ "${os}" = "linux" ] || [ "${os}" = "windows" ]
   }
 
   # Happy path – daemon up and OS type known.
-  if _docker_os_ok; then
+  if check_docker_os; then
     return 0
   fi
 
@@ -173,9 +173,9 @@ ensure_docker_running() {
     # socket.  Try the local Unix socket first before attempting to start a
     # native daemon – this handles the "Desktop running but wrong context"
     # case without needing sudo.
-    if DOCKER_HOST="${DOCKER_UNIX_SOCK}" _docker_os_ok 2>/dev/null; then
-      export DOCKER_HOST="${DOCKER_UNIX_SOCK}"
-      echo "[+] Using native Docker socket (${DOCKER_UNIX_SOCK})."
+    if DOCKER_HOST="${docker_unix_sock}" check_docker_os 2>/dev/null; then
+      export DOCKER_HOST="${docker_unix_sock}"
+      echo "[+] Using native Docker socket (${docker_unix_sock})."
       return 0
     fi
 
@@ -187,15 +187,15 @@ ensure_docker_running() {
     containerd_err="$(sudo service containerd start 2>&1)" || true
     docker_err="$(sudo service docker start 2>&1)" || true
 
-    for _ in $(seq 1 "${DOCKER_START_RETRIES}"); do
+    for _ in $(seq 1 "${docker_start_retries}"); do
       sleep 1
-      if _docker_os_ok; then
+      if check_docker_os; then
         echo "[+] Docker daemon started successfully."
         return 0
       fi
-      if DOCKER_HOST="${DOCKER_UNIX_SOCK}" _docker_os_ok 2>/dev/null; then
-        export DOCKER_HOST="${DOCKER_UNIX_SOCK}"
-        echo "[+] Docker daemon started (using ${DOCKER_UNIX_SOCK})."
+      if DOCKER_HOST="${docker_unix_sock}" check_docker_os 2>/dev/null; then
+        export DOCKER_HOST="${docker_unix_sock}"
+        echo "[+] Docker daemon started (using ${docker_unix_sock})."
         return 0
       fi
     done
