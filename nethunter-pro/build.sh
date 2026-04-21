@@ -150,7 +150,10 @@ ARGS="${ARGS} \
 
 if [ "${use_docker}" ]; then
   DOCKER_KVM_ARG=""
-  DOCKER_SERVER_OS="$(docker version --format '{{.Server.Os}}' 2>/dev/null || true)"
+  DOCKER_SERVER_OS=""
+  if ! DOCKER_SERVER_OS="$(docker version --format '{{.Server.Os}}' 2>/dev/null)"; then
+    [ "${verbose}" ] && echo "[!] Warning: unable to query Docker server OS; skipping /dev/kvm passthrough."
+  fi
   if [ -e /dev/kvm ] && [ "${DOCKER_SERVER_OS}" = "linux" ]; then
     DOCKER_KVM_ARG="--device /dev/kvm"
   fi
