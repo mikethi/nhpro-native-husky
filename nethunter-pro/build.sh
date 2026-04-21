@@ -149,27 +149,56 @@ ARGS="${ARGS} \
 [ "${verbose}" ]      && ARGS="${ARGS} --verbose"
 
 ensure_docker_running() {
-  # Quick health-check – daemon already reachable, nothing to do.
-  if docker info >/dev/null 2>&1; then
+  # Returns 0 only when the daemon is reachable AND reports a known OS type.
+  # The Docker CLI checks ServerInfo.OSType before every `docker run`; if it is
+  # empty or unrecognised the run fails with "unknown server OS:".
+  _docker_os_ok() {
+    local os
+    os="$(docker info --format '{{.OSType}}' 2>/dev/null)" || return 1
+    [ "${os}" = "linux" ] || [ "${os}" = "windows" ]
+  }
+
+  # Happy path – daemon up and OS type known.
+  if _docker_os_ok; then
     return 0
   fi
 
-  # In WSL2 the daemon must be started manually each session.
   if grep -qi "microsoft" /proc/version 2>/dev/null; then
-    echo "[+] WSL2 detected: Docker daemon not running – attempting to start it..."
-    if sudo service docker start >/dev/null 2>&1; then
-      # Wait up to 10 s for the socket to become reachable.
-      local i
-      for i in 1 2 3 4 5 6 7 8 9 10; do
-        sleep 1
-        if docker info >/dev/null 2>&1; then
-          echo "[+] Docker daemon started successfully."
-          return 0
-        fi
-      done
+    # WSL2: Docker Desktop may have set the default context to a Windows-side
+    # socket.  Try the local Unix socket first before attempting to start a
+    # native daemon – this handles the "Desktop running but wrong context"
+    # case without needing sudo.
+    if DOCKER_HOST=unix:///var/run/docker.sock _docker_os_ok 2>/dev/null; then
+      export DOCKER_HOST=unix:///var/run/docker.sock
+      echo "[+] Using native Docker socket (/var/run/docker.sock)."
+      return 0
     fi
-    echo "[!] Could not start Docker daemon in WSL2." >&2
-    echo "[!] Run: sudo service docker start" >&2
+
+    # Daemon not reachable at all – try starting it.
+    echo "[+] WSL2 detected: Docker daemon not running – attempting to start it..."
+    # containerd must be up before dockerd; starting it is a no-op if already running.
+    sudo service containerd start >/dev/null 2>&1 || true
+    sudo service docker start >/dev/null 2>&1 || true
+
+    for _ in $(seq 1 10); do
+      sleep 1
+      if _docker_os_ok; then
+        echo "[+] Docker daemon started successfully."
+        return 0
+      fi
+      if DOCKER_HOST=unix:///var/run/docker.sock _docker_os_ok 2>/dev/null; then
+        export DOCKER_HOST=unix:///var/run/docker.sock
+        echo "[+] Docker daemon started (using /var/run/docker.sock)."
+        return 0
+      fi
+    done
+
+    echo "[!] Docker daemon is not reachable in WSL2." >&2
+    echo "[!]   Using Docker Desktop for Windows?" >&2
+    echo "[!]     1. Start Docker Desktop on Windows." >&2
+    echo "[!]     2. In Settings → Resources → WSL Integration, enable your Kali distro." >&2
+    echo "[!]   Using native Docker (docker.io installed in WSL2)?" >&2
+    echo "[!]     sudo service docker start" >&2
     exit 1
   fi
 
