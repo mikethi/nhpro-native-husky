@@ -1,0 +1,157 @@
+{{- $architecture := or .architecture "arm64" -}}
+{{- $device := or .device "husky" }}
+
+architecture: {{ $architecture }}
+
+# Google Pixel 8 Pro (husky) – zuma SoC base packages
+#
+# NO HAL POLICY
+# Every hardware subsystem is accessed directly through a kernel interface.
+# No Android Hardware Abstraction Layer (HAL) packages are installed.
+#
+#   WiFi / BT   → nl80211 + wpa_supplicant / BlueZ HCI   (no WLAN HAL)
+#   Display     → DRM/KMS + Wayland                       (no gralloc HAL)
+#   Audio       → ALSA/ASoC + PipeWire                    (no AudioFlinger HAL)
+#   Camera      → V4L2                                     (no camera HAL)
+#   Modem       → ModemManager                             (no RIL HAL)
+#   Input       → /dev/input evdev                         (no input HAL)
+#   Sensors     → iio-sensor-proxy                         (no sensor HAL)
+#   GPU         → DRM/KMS (pvrsrvkm via mainline DRM)      (no gralloc HAL)
+
+actions:
+  # ── Drop systemd-repart: we manage partitions at flash time ───────────────
+  - action: run
+    chroot: true
+    description: Drop systemd-repart configuration
+    command: rm -rf /etc/repart.d/
+
+  # ── Sultan kernel ─────────────────────────────────────────────────────────
+  # The Sultan kernel (kerneltoast/android_kernel_google_zuma) provides full
+  # support for the zuma SoC with all HAL-replacement kernel interfaces
+  # (DRM/KMS, ALSA/ASoC, V4L2, nl80211, HCI, ModemManager IPC) enabled.
+  - action: apt
+    recommends: false
+    description: Install Sultan kernel (zuma / husky)
+    packages:
+      - linux-image-arm64
+
+  # ── Boot image tools ──────────────────────────────────────────────────────
+  # mkbootimg builds the Android boot header v4 image that fastboot flashes.
+  - action: apt
+    recommends: false
+    description: Install boot image tools
+    packages:
+      - mkbootimg
+      - abootimg
+      - fastboot
+
+  # ── Firmware (non-free) ───────────────────────────────────────────────────
+  # All firmware is loaded by the kernel via request_firmware() — no HAL.
+  - action: apt
+    recommends: false
+    description: Install non-free firmware blobs
+    packages:
+      - firmware-samsung
+      - firmware-misc-nonfree
+
+  # ── WiFi: nl80211 + wpa_supplicant (no WLAN HAL) ─────────────────────────
+  - action: apt
+    recommends: false
+    description: Install WiFi stack (nl80211, no HAL)
+    packages:
+      - wpasupplicant
+      - iw
+      - wireless-tools
+      - iwd
+
+  # ── Bluetooth: BlueZ HCI (no BT HAL) ────────────────────────────────────
+  - action: apt
+    recommends: false
+    description: Install Bluetooth stack (BlueZ HCI, no HAL)
+    packages:
+      - bluez
+      - bluez-tools
+
+  # ── Audio: ALSA/ASoC + PipeWire (no AudioFlinger HAL) ────────────────────
+  - action: apt
+    recommends: false
+    description: Install audio stack (ALSA/PipeWire, no HAL)
+    packages:
+      - alsa-utils
+      - pipewire
+      - pipewire-audio
+      - pipewire-pulse
+      - wireplumber
+
+  # ── Cellular: ModemManager (no RIL HAL) ──────────────────────────────────
+  - action: apt
+    recommends: false
+    description: Install cellular stack (ModemManager, no HAL)
+    packages:
+      - modemmanager
+      - ofono
+      - libqmi-utils
+      - libmbim-utils
+
+  # ── Camera: V4L2 (no camera HAL) ─────────────────────────────────────────
+  - action: apt
+    recommends: false
+    description: Install camera stack (V4L2, no HAL)
+    packages:
+      - v4l-utils
+      - libv4l-0
+
+  # ── Display: DRM/KMS + Wayland (no gralloc HAL) ──────────────────────────
+  - action: apt
+    recommends: false
+    description: Install display stack (DRM/KMS/Wayland, no HAL)
+    packages:
+      - libdrm2
+      - libdrm-dev
+      - mesa-utils
+      - wayland-utils
+
+  # ── Input: evdev (no input HAL) ───────────────────────────────────────────
+  - action: apt
+    recommends: false
+    description: Install input stack (evdev, no HAL)
+    packages:
+      - evtest
+      - libevdev2
+      - xserver-xorg-input-evdev
+
+  # ── Sensors: iio-sensor-proxy (no sensor HAL) ────────────────────────────
+  - action: apt
+    recommends: false
+    description: Install sensor proxy (IIO, no HAL)
+    packages:
+      - iio-sensor-proxy
+
+  # ── USB-C / OTG ───────────────────────────────────────────────────────────
+  - action: apt
+    recommends: false
+    description: Install USB utilities
+    packages:
+      - usbutils
+      - usb-modeswitch
+
+  # ── Kali NetHunter tools ──────────────────────────────────────────────────
+  - action: apt
+    recommends: false
+    description: Install Kali NetHunter tools
+    packages:
+      - kali-linux-nethunter
+      - kali-tools-wireless
+      - kali-tools-bluetooth
+      - kali-tools-sniffing-spoofing
+      - aircrack-ng
+      - hostapd
+      - dnsmasq
+      - nmap
+      - metasploit-framework
+
+  # ── Device overlay (udev rules, modprobe.d, modules-load.d) ──────────────
+  - action: overlay
+    description: Install husky firmware rules and no-HAL driver options
+    source: overlays/husky
+    destination: /

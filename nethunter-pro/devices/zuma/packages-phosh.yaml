@@ -1,0 +1,45 @@
+{{- $architecture := or .architecture "arm64" -}}
+{{- $device := or .device "husky" }}
+
+architecture: {{ $architecture }}
+
+# Google Pixel 8 Pro (husky) – phosh packages
+#
+# Phosh is a Wayland-native mobile shell built on libhandy/libadwaita.
+# It uses DRM/KMS + libinput directly — no gralloc, input, or display HAL.
+
+actions:
+  - action: apt
+    recommends: false
+    description: Install Phosh mobile shell (Wayland/DRM, no HAL)
+    packages:
+      - phosh
+      - phoc
+      - phosh-mobile-settings
+      - gnome-software
+      - squeekboard
+      - calls
+      - chatty
+      - gnome-contacts
+      - portfolio
+      - megapixels
+      - lollypop
+      - kgx
+
+  - action: apt
+    recommends: false
+    description: Install mobile-friendly browser
+    packages:
+      - firefox-esr
+
+  - action: apt
+    recommends: false
+    description: Install display manager for Phosh
+    packages:
+      - greetd
+      - greetd-phog
+
+  - action: run
+    description: Enable greetd display manager
+    chroot: true
+    command: systemctl enable greetd.service
