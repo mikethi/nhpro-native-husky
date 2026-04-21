@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -14,6 +15,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
+DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+DEFAULT_TIMEOUT_SECONDS = 60
+DEFAULT_USER_AGENT = "fetched-sources-repo/1.0"
+HASH_SUFFIX_LENGTH = 12
+SHELL_VAR_FORBIDDEN_CHARS = " \t#"
 
 
 @dataclass
@@ -27,9 +33,22 @@ class FetchJob:
 def parse_simple_shell_vars(text: str) -> dict[str, str]:
     values: dict[str, str] = {}
     for line in text.splitlines():
-        match = re.match(r"^\s*([A-Za-z_][A-Za-z0-9_]*)=\"([^\"]*)\"\s*$", line)
-        if match:
-            values[match.group(1)] = match.group(2)
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "=" not in stripped:
+            continue
+        name, raw_value = stripped.split("=", 1)
+        name = name.strip()
+        raw_value = raw_value.strip()
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+            continue
+        if raw_value.startswith('"') and raw_value.endswith('"') and len(raw_value) >= 2:
+            values[name] = raw_value[1:-1]
+        elif raw_value.startswith("'") and raw_value.endswith("'") and len(raw_value) >= 2:
+            values[name] = raw_value[1:-1]
+        elif raw_value and not any(ch in raw_value for ch in SHELL_VAR_FORBIDDEN_CHARS):
+            values[name] = raw_value
     return values
 
 
@@ -47,14 +66,38 @@ def expand_apkbuild_vars(value: str, variables: dict[str, str]) -> str:
 def extract_apkbuild_source_urls(apkbuild_path: Path) -> list[str]:
     text = apkbuild_path.read_text(encoding="utf-8", errors="ignore")
     variables = parse_simple_shell_vars(text)
+    lines = text.splitlines()
+    source_lines: list[str] = []
+    in_source = False
+    quote_char = '"'
 
-    match = re.search(r'(?ms)^\s*source="(.*?)"\s*$', text)
-    if not match:
+    for line in lines:
+        stripped = line.strip()
+        if not in_source:
+            match = re.match(r"^source=(['\"])(.*)$", stripped)
+            if not match:
+                continue
+            quote_char = match.group(1)
+            remainder = match.group(2)
+            if remainder.endswith(quote_char):
+                inline_source = remainder[:-1]
+                if inline_source.strip():
+                    source_lines.extend(inline_source.split())
+                break
+            if remainder.strip():
+                source_lines.append(remainder)
+            in_source = True
+            continue
+
+        if stripped == quote_char:
+            break
+        source_lines.append(line)
+
+    if not source_lines:
         return []
 
-    source_block = match.group(1)
     urls: list[str] = []
-    for raw_line in source_block.splitlines():
+    for raw_line in source_lines:
         line = raw_line.strip()
         if not line:
             continue
@@ -86,7 +129,10 @@ def extract_jobs(repo_root: Path) -> list[FetchJob]:
         relative_apkbuild = apkbuild_path.relative_to(repo_root)
         for url in extract_apkbuild_source_urls(apkbuild_path):
             url_path = urllib.parse.urlparse(url).path
-            filename = Path(url_path).name or "downloaded-source"
+            filename = Path(url_path).name
+            if not filename:
+                suffix = hashlib.sha256(url.encode("utf-8")).hexdigest()[:HASH_SUFFIX_LENGTH]
+                filename = f"downloaded-source-{suffix}"
             destination = relative_apkbuild.parent / "sources" / filename
             jobs.append(
                 FetchJob(
@@ -113,12 +159,16 @@ def clone_git_repo(url: str, destination: Path, dry_run: bool) -> dict[str, obje
         return {"status": "planned"}
 
     destination.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        ["git", "--no-pager", "clone", "--depth", "1", url, str(destination)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        subprocess.run(
+            ["git", "clone", "--depth", "1", url, str(destination)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as error:
+        stderr = (error.stderr or "").strip()
+        raise RuntimeError(f"git clone failed for {url}: {stderr or error}") from error
     return {"status": "downloaded"}
 
 
@@ -127,8 +177,8 @@ def download_file(url: str, destination: Path, max_download_bytes: int, dry_run:
         return {"status": "planned"}
 
     destination.parent.mkdir(parents=True, exist_ok=True)
-    request = urllib.request.Request(url, headers={"User-Agent": "fetched-sources-repo/1.0"})
-    with urllib.request.urlopen(request, timeout=60) as response:
+    request = urllib.request.Request(url, headers={"User-Agent": DEFAULT_USER_AGENT})
+    with urllib.request.urlopen(request, timeout=DEFAULT_TIMEOUT_SECONDS) as response:
         content_length = response.headers.get("Content-Length")
         if content_length is not None:
             length = int(content_length)
@@ -138,7 +188,7 @@ def download_file(url: str, destination: Path, max_download_bytes: int, dry_run:
         total = 0
         chunks: list[bytes] = []
         while True:
-            chunk = response.read(1024 * 1024)
+            chunk = response.read(DOWNLOAD_CHUNK_SIZE)
             if not chunk:
                 break
             total += len(chunk)
@@ -149,6 +199,14 @@ def download_file(url: str, destination: Path, max_download_bytes: int, dry_run:
     data = b"".join(chunks)
     destination.write_bytes(data)
     return {"status": "downloaded", "bytes": len(data)}
+
+
+def validate_fetch_url(url: str) -> None:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError(f"unsupported URL scheme for fetch: {url}")
+    if not parsed.netloc:
+        raise ValueError(f"invalid URL (missing host): {url}")
 
 
 def run_jobs(
@@ -167,11 +225,12 @@ def run_jobs(
             "destination": str(job.destination),
         }
         try:
+            validate_fetch_url(job.url)
             if job.source_type == "git":
                 entry.update(clone_git_repo(job.url, destination, dry_run))
             else:
                 entry.update(download_file(job.url, destination, max_download_bytes, dry_run))
-        except (subprocess.CalledProcessError, urllib.error.URLError, OSError, ValueError) as error:
+        except (subprocess.CalledProcessError, urllib.error.URLError, OSError, ValueError, RuntimeError) as error:
             entry["status"] = "failed"
             entry["error"] = str(error)
         results.append(entry)
