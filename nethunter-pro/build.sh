@@ -148,7 +148,38 @@ ARGS="${ARGS} \
 [ "${debug}" ]        && ARGS="${ARGS} --debug-shell"
 [ "${verbose}" ]      && ARGS="${ARGS} --verbose"
 
+ensure_docker_running() {
+  # Quick health-check – daemon already reachable, nothing to do.
+  if docker info >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # In WSL2 the daemon must be started manually each session.
+  if grep -qi "microsoft" /proc/version 2>/dev/null; then
+    echo "[+] WSL2 detected: Docker daemon not running – attempting to start it..."
+    if sudo service docker start >/dev/null 2>&1; then
+      # Wait up to 10 s for the socket to become reachable.
+      local i
+      for i in 1 2 3 4 5 6 7 8 9 10; do
+        sleep 1
+        if docker info >/dev/null 2>&1; then
+          echo "[+] Docker daemon started successfully."
+          return 0
+        fi
+      done
+    fi
+    echo "[!] Could not start Docker daemon in WSL2." >&2
+    echo "[!] Run: sudo service docker start" >&2
+    exit 1
+  fi
+
+  echo "[!] Docker daemon is not running. Start it and re-run this script." >&2
+  exit 1
+}
+
 if [ "${use_docker}" ]; then
+  ensure_docker_running
+
   DOCKER_KVM_ARG=""
   DOCKER_SERVER_OS=""
   if ! DOCKER_SERVER_OS="$(docker version --format '{{.Server.Os}}' 2>/dev/null)"; then
