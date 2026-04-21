@@ -152,6 +152,25 @@ python3 scripts/create_repo_bundle_zip.py
 
 The zip is written to `dist/repo-and-links.zip`.
 
+## Generate a repo with fetched external sources
+
+Create a separate repo-style directory containing the external files this repository fetches, placed in paths matching where they are used:
+
+```bash
+python3 scripts/create_fetched_sources_repo.py --force
+```
+
+Default output:
+
+- `dist/fetched-sources-repo/`
+- `dist/fetched-sources-repo/fetched_sources_manifest.json`
+
+Preview without downloading:
+
+```bash
+python3 scripts/create_fetched_sources_repo.py --dry-run --force
+```
+
 A GitHub Actions workflow (`Repository Bundle Zip`) also uploads the same zip as a downloadable artifact on pushes and manual runs:
 
 - https://github.com/mikethi/pmos-google-nativehusky/actions/workflows/repo-bundle.yml
