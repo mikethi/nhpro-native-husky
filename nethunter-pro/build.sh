@@ -163,8 +163,9 @@ ensure_docker_running() {
     return 0
   fi
 
+  # Detect WSL (both WSL1 and WSL2 require manual service start).
   if grep -qi "microsoft" /proc/version 2>/dev/null; then
-    # WSL2: Docker Desktop may have set the default context to a Windows-side
+    # Docker Desktop may have set the default context to a Windows-side
     # socket.  Try the local Unix socket first before attempting to start a
     # native daemon – this handles the "Desktop running but wrong context"
     # case without needing sudo.
@@ -175,12 +176,13 @@ ensure_docker_running() {
     fi
 
     # Daemon not reachable at all – try starting it.
-    echo "[+] WSL2 detected: Docker daemon not running – attempting to start it..."
+    echo "[+] WSL detected: Docker daemon not running – attempting to start it..."
     # containerd must be up before dockerd; starting it is a no-op if already running.
     sudo service containerd start >/dev/null 2>&1 || true
     sudo service docker start >/dev/null 2>&1 || true
 
-    for _ in $(seq 1 10); do
+    local retries=10
+    for _ in $(seq 1 "${retries}"); do
       sleep 1
       if _docker_os_ok; then
         echo "[+] Docker daemon started successfully."
@@ -193,11 +195,11 @@ ensure_docker_running() {
       fi
     done
 
-    echo "[!] Docker daemon is not reachable in WSL2." >&2
+    echo "[!] Docker daemon is not reachable in WSL." >&2
     echo "[!]   Using Docker Desktop for Windows?" >&2
     echo "[!]     1. Start Docker Desktop on Windows." >&2
     echo "[!]     2. In Settings → Resources → WSL Integration, enable your Kali distro." >&2
-    echo "[!]   Using native Docker (docker.io installed in WSL2)?" >&2
+    echo "[!]   Using native Docker (docker.io installed in WSL)?" >&2
     echo "[!]     sudo service docker start" >&2
     exit 1
   fi
@@ -212,7 +214,7 @@ if [ "${use_docker}" ]; then
   DOCKER_KVM_ARG=""
   DOCKER_SERVER_OS=""
   if ! DOCKER_SERVER_OS="$(docker version --format '{{.Server.Os}}' 2>/dev/null)"; then
-    [ "${verbose}" ] && echo "[!] Warning: unable to query Docker server OS; skipping /dev/kvm passthrough."
+    echo "[!] Warning: unable to query Docker server OS; skipping /dev/kvm passthrough."
   fi
   if [ -e /dev/kvm ] && [ "${DOCKER_SERVER_OS}" = "linux" ]; then
     DOCKER_KVM_ARG="--device /dev/kvm"
