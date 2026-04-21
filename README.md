@@ -99,17 +99,32 @@
 
 - postmarketOS installation docs: <https://wiki.postmarketos.org/wiki/Installation_guide>
 - pmbootstrap docs: <https://docs.postmarketos.org/pmbootstrap/>
+- pmaports tree: <https://gitlab.postmarketos.org/postmarketOS/pmaports>
 - Pixel 8 Pro device page: <https://wiki.postmarketos.org/wiki/Google_Pixel_8_Pro_(google-husky)>
 - Android Fastboot (`fastboot`): <https://developer.android.com/tools/releases/platform-tools>
 - Device package files in this repo: `device/google-husky/`
 
 #### Steps
 
-1. Install and initialize `pmbootstrap` by following the official postmarketOS installation guide.
-2. Use the `google-husky` device files in this repository (`device/google-husky/`) as your local device source.
-3. Build/install with `pmbootstrap` for `google-husky` using the documented device workflow from the postmarketOS wiki page above.
-4. Boot the phone to fastboot mode.
-5. Flash the generated postmarketOS images using the flashing method documented on the same device wiki page.
+1. Install `pmbootstrap`:
+   ```bash
+   python3 -m pip install --user pmbootstrap
+   ```
+2. Prepare a local `pmaports` checkout:
+   ```bash
+   git clone https://gitlab.postmarketos.org/postmarketOS/pmaports.git
+   ```
+3. Copy this repository's device tree into your local `pmaports`:
+   ```bash
+   cp -r /path/to/nhpro-native-husky/device/google-husky /path/to/pmaports/device/
+   ```
+4. Initialize and build/install for `google-husky` with your local `pmaports`:
+   ```bash
+   pmbootstrap --aports /path/to/pmaports init
+   pmbootstrap --aports /path/to/pmaports install
+   ```
+5. Boot the phone to fastboot mode.
+6. Flash generated images using the current `google-husky` instructions from the device wiki page above.
 
 ## Downloadable bundle zip
 
