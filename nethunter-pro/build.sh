@@ -24,7 +24,7 @@
 #   -D              Debug output
 #
 # Prerequisites (bare metal):
-#   sudo apt install git debos bmap-tools xz-utils android-sdk-libsparse-utils
+#   sudo apt install git debos xz-utils android-sdk-libsparse-utils
 #
 # Prerequisites (Docker):
 #   sudo apt install git docker.io kali-archive-keyring
