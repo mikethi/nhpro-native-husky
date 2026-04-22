@@ -107,7 +107,61 @@
 
 ---
 
-### Installation type C: postmarketOS (pmbootstrap workflow)
+### Installation type C: Windows 10 automated setup (PowerShell 7 + WSL2 + Kali)
+
+#### Prerequisites
+
+- Windows 10 build 19041 (20H1) or later — run `winver` to check
+- PowerShell 7.2 or later — download from <https://aka.ms/powershell>
+- An internet connection
+
+#### Step 1 — Windows: install WSL2, Kali, and usbipd-win
+
+Open **PowerShell 7 as Administrator** (right-click → "Run as administrator"), then run:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\scripts\setup-wsl-kali.ps1
+```
+
+If a reboot is needed to activate WSL features, the script will prompt you. After rebooting, re-run the same command to continue. The script has no options — it is fully automated.
+
+#### Step 2 — Kali: build the NetHunter Pro image
+
+Open the Kali terminal (search "kali" in Start, or run `wsl -d kali-linux`), then:
+
+```bash
+cd ~/nhpro-native-husky/nethunter-pro
+./kali-build.sh [OPTIONS]
+```
+
+See [nethunter-pro/README.md](nethunter-pro/README.md#kali-buildsh) for all `kali-build.sh` options.
+
+#### Step 3 — Attach the Pixel 8 Pro and flash
+
+Put the phone in fastboot mode (hold **Power + Volume Down** 10 s), then in an elevated PowerShell window:
+
+```powershell
+usbipd list                          # note the BUSID of "Android Bootloader Interface"
+usbipd bind   --busid <BUSID>        # one-time binding (requires admin)
+usbipd attach --wsl --busid <BUSID>  # attach for this session
+```
+
+Back in the Kali terminal, confirm the phone is visible and flash:
+
+```bash
+fastboot devices
+fastboot flashing unlock             # first time only — wipes device
+fastboot flash boot     nethunterpro-<VERSION>-husky-phosh-boot.img
+fastboot flash userdata nethunterpro-<VERSION>-husky-phosh.img
+fastboot reboot
+```
+
+Flash commands with the correct filenames are printed automatically at the end of `kali-build.sh`.
+
+---
+
+### Installation type D: postmarketOS (pmbootstrap workflow)
 
 #### Prerequisites
 
@@ -151,6 +205,25 @@ python3 scripts/create_repo_bundle_zip.py
 ```
 
 The zip is written to `dist/repo-and-links.zip`.
+
+## Generate a repo with fetched external sources
+
+Create a separate repo-style directory containing the external files this repository fetches, placed in paths matching where they are used:
+
+```bash
+python3 scripts/create_fetched_sources_repo.py --force
+```
+
+Default output:
+
+- `dist/fetched-sources-repo/`
+- `dist/fetched-sources-repo/fetched_sources_manifest.json`
+
+Preview without downloading:
+
+```bash
+python3 scripts/create_fetched_sources_repo.py --dry-run --force
+```
 
 A GitHub Actions workflow (`Repository Bundle Zip`) also uploads the same zip as a downloadable artifact on pushes and manual runs:
 
