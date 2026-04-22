@@ -86,6 +86,30 @@ class TestCreateRepoBundleZip(unittest.TestCase):
             downloaded_path = destination.parent / results[0]["stored_as"]
             self.assertTrue(downloaded_path.exists())
 
+    def test_download_links_skips_urls_with_control_characters(self):
+        bad_url = "https://bad.example/file\x05name.txt"
+        url_locations = {
+            bad_url: ["bad.txt"],
+            "https://ok.example/file.bin": ["ok.txt"],
+        }
+
+        def fake_urlopen(request, timeout):
+            self.assertNotIn("\x05", request.full_url)
+            return FakeResponse([b"ok"], content_length=2)
+
+        with tempfile.TemporaryDirectory() as td:
+            destination = Path(td) / "linked_files"
+            destination.mkdir(parents=True)
+
+            with mock.patch.object(module.urllib.request, "urlopen", side_effect=fake_urlopen) as mock_urlopen:
+                results = module.download_links(url_locations, destination)
+
+            self.assertEqual(results[0]["status"], "skipped")
+            self.assertIsNone(results[0]["stored_as"])
+            self.assertIn("ASCII control characters", results[0]["error"])
+            self.assertEqual(results[1]["status"], "downloaded")
+            self.assertEqual(mock_urlopen.call_count, 1)
+
     def test_copy_tracked_files_and_create_zip(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
