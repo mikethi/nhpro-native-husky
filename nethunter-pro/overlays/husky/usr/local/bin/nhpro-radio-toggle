@@ -29,12 +29,13 @@
 #   resume cleanly.
 #
 # Usage:
-#   nhpro-radio-toggle wifi      on|off
-#   nhpro-radio-toggle bluetooth on|off
-#   nhpro-radio-toggle cell      on|off
-#   nhpro-radio-toggle all       off        # kill-switch: all radios off
-#   nhpro-radio-toggle all       on         # restore all radios
-#   nhpro-radio-toggle status               # print current soft-block state
+#   nhpro-radio-toggle wifi            on|off
+#   nhpro-radio-toggle bluetooth       on|off
+#   nhpro-radio-toggle cell            on|off
+#   nhpro-radio-toggle all             off        # kill-switch: all radios off
+#   nhpro-radio-toggle all             on         # restore all radios
+#   nhpro-radio-toggle monitor <iface> on|off     # put adapter into/out of monitor mode
+#   nhpro-radio-toggle status                     # print current soft-block state
 
 set -e
 
@@ -250,7 +251,68 @@ cell_on() {
     fi
 }
 
-# ── status ────────────────────────────────────────────────────────────────────
+# ── Monitor mode enable / disable ────────────────────────────────────────────
+#
+# monitor_on <iface>
+#   Puts a wireless interface into monitor (promiscuous raw-frame capture) mode.
+#   NetworkManager is stopped first so it cannot reset the interface type.
+#
+# monitor_off <iface>
+#   Returns the interface to managed mode and restarts NetworkManager.
+#   Safe to call even if the interface was not previously in monitor mode.
+
+monitor_on() {
+    iface="${1:-}"
+    if [ -z "$iface" ]; then
+        printf 'nhpro-radio-toggle: monitor: interface name required\n' >&2
+        exit 1
+    fi
+    if ! iface_exists "$iface"; then
+        printf 'nhpro-radio-toggle: monitor: interface %s not found\n' "$iface" >&2
+        exit 1
+    fi
+    if ! have_iw; then
+        printf 'nhpro-radio-toggle: monitor: iw not found – cannot set monitor mode\n' >&2
+        exit 1
+    fi
+
+    # Stop NetworkManager so it cannot reset the interface type while we work
+    if have_systemctl; then
+        systemctl stop NetworkManager.service 2>/dev/null || true
+    fi
+
+    # Interface must be down before iw will allow a type change
+    iface_down "$iface"
+    iw dev "$iface" set type monitor
+    iface_up "$iface"
+}
+
+monitor_off() {
+    iface="${1:-}"
+    if [ -z "$iface" ]; then
+        printf 'nhpro-radio-toggle: monitor: interface name required\n' >&2
+        exit 1
+    fi
+    if ! iface_exists "$iface"; then
+        printf 'nhpro-radio-toggle: monitor: interface %s not found\n' "$iface" >&2
+        exit 1
+    fi
+    if ! have_iw; then
+        printf 'nhpro-radio-toggle: monitor: iw not found – cannot change interface type\n' >&2
+        exit 1
+    fi
+
+    iface_down "$iface"
+    iw dev "$iface" set type managed
+    iface_up "$iface"
+
+    # Restart NetworkManager now that the interface is back in managed mode
+    if have_systemctl && ! wifi_audit_active; then
+        systemctl start NetworkManager.service 2>/dev/null || true
+    fi
+}
+
+
 
 print_status() {
     for type in wifi bluetooth "$cell_rfkill_type"; do
@@ -282,6 +344,7 @@ print_status() {
 
 radio="${1:-}"
 state="${2:-}"
+target="${3:-}"   # used by the 'monitor' subcommand
 
 case "$radio" in
     wifi)
@@ -324,8 +387,19 @@ case "$radio" in
     status)
         print_status
         ;;
+    monitor)
+        # monitor <iface> on|off  – $state holds the iface, $target holds on|off
+        iface="$state"
+        onoff="$target"
+        case "$onoff" in
+            on)  monitor_on  "$iface"; printf 'nhpro-radio-toggle: %s monitor on\n'  "$iface" ;;
+            off) monitor_off "$iface"; printf 'nhpro-radio-toggle: %s monitor off\n' "$iface" ;;
+            *)   printf 'Usage: nhpro-radio-toggle monitor <iface> {on|off}\n' >&2; exit 1 ;;
+        esac
+        ;;
     *)
         printf 'Usage: nhpro-radio-toggle {wifi|bluetooth|cell|all} {on|off}\n' >&2
+        printf '       nhpro-radio-toggle monitor <iface> {on|off}\n' >&2
         printf '       nhpro-radio-toggle status\n' >&2
         exit 1
         ;;
