@@ -52,6 +52,18 @@ def download_links(url_locations: dict[str, list[str]], destination: Path) -> li
     results: list[dict[str, object]] = []
 
     for index, (url, referenced_by) in enumerate(url_locations.items(), start=1):
+        if any(ord(char) < 32 or ord(char) == 127 for char in url):
+            results.append(
+                {
+                    "url": url,
+                    "referenced_by": sorted(set(referenced_by)),
+                    "stored_as": None,
+                    "status": "skipped",
+                    "error": "URL contains ASCII control characters and was skipped",
+                }
+            )
+            continue
+
         parsed = urllib.parse.urlparse(url)
         file_name = safe_path_component(
             "_".join(part for part in [parsed.netloc, parsed.path.strip("/"), parsed.query] if part)
