@@ -1,0 +1,77 @@
+{{- $architecture := or .architecture "arm64" -}}
+{{- $device := or .device "husky" }}
+
+architecture: {{ $architecture }}
+
+# Google Pixel 8 Pro (husky) – phosh packages
+#
+# Phosh is a Wayland-native mobile shell built on libhandy/libadwaita.
+# It uses DRM/KMS + libinput directly — no gralloc, input, or display HAL.
+
+actions:
+  - action: apt
+    recommends: false
+    description: Install Phosh mobile shell (Wayland/DRM, no HAL)
+    packages:
+      - phosh
+      - phoc
+      - phosh-mobile-settings
+      - gnome-software
+      - squeekboard
+      - calls
+      - chatty
+      - gnome-contacts
+      - portfolio
+      - megapixels
+      - lollypop
+      - kgx
+
+  - action: apt
+    recommends: false
+    description: Install mobile-friendly browser
+    packages:
+      - firefox-esr
+
+  - action: apt
+    recommends: false
+    description: Install display manager for Phosh
+    packages:
+      - greetd
+      - greetd-phog
+
+  - action: run
+    description: Enable greetd display manager
+    chroot: true
+    command: systemctl enable greetd.service
+
+  # ── System monitor and perf/radio toggle tools ───────────────────────────
+  # btop   – terminal resource monitor (CPU/RAM/proc), launched from kgx.
+  # conky  – terminal widget: live sched/freq/thermal/radio readings.
+  # python3-gi – GTK3 Python bindings for nhpro-system-manager GUI.
+  # rfkill – kernel-level radio block/unblock (WiFi, BT, cell/wwan).
+  #          rfkill is part of util-linux and is already present on Kali;
+  #          listed explicitly so the dep is declared and auditable.
+  # No conflicts with existing packages:
+  #   btop / conky read /proc and /sys only.
+  #   python3-gi is a pure binding layer; no overlap with PipeWire/BlueZ/Phosh.
+  #   rfkill is a kernel utility; it does not replace wpasupplicant, iwd,
+  #   bluez, or modemmanager – it simply gates their hardware access.
+  - action: apt
+    recommends: false
+    description: Install system monitor and toggle dependencies
+    packages:
+      - btop
+      - conky-all
+      - python3-gi
+      - rfkill
+
+  # ── Mark toggle scripts executable and enable boot service ───────────────
+  - action: run
+    description: Set toggle scripts executable
+    chroot: true
+    command: chmod +x /usr/local/bin/nhpro-perf-toggle /usr/local/bin/nhpro-radio-toggle /usr/local/bin/nhpro-system-manager
+
+  - action: run
+    description: Enable NHPro CPU perf-mode restore service
+    chroot: true
+    command: systemctl enable nhpro-perf-mode.service

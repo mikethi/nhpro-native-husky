@@ -10,7 +10,7 @@ arch="aarch64"
 license="MIT"
 depends="
 	postmarketos-base
-	linux-google-husky
+	linux-google-husky-sultan
 "
 makedepends="devicepkg-dev"
 subpackages="$pkgname-nonfree-firmware:nonfree_firmware"
@@ -19,6 +19,7 @@ source="
 	firmware/50-husky-firmware.rules
 	firmware/husky-modprobe.conf
 	firmware/husky-modules.conf
+	firmware/README.md
 "
 
 build() {

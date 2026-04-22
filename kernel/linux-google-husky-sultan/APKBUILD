@@ -1,0 +1,61 @@
+# Reference: <https://postmarketos.org/devicekernel>
+# Maintainer: Your Name <your@email.com>
+
+_flavor="google-husky-sultan"
+_config="config-$_flavor.aarch64"
+
+pkgname=linux-$_flavor
+pkgver=16.0.0_sultan
+pkgrel=0
+pkgdesc="Sultan kernel for Google Pixel 8 Pro (husky) – kerneltoast/android_kernel_google_zuma"
+url="https://github.com/kerneltoast/android_kernel_google_zuma"
+arch="aarch64"
+license="GPL-2.0-only"
+options="!strip !check !tracedeps pmb:cross-native"
+makedepends="
+	bash
+	bc
+	bison
+	devicepkg-dev
+	findutils
+	flex
+	linux-headers
+	openssl-dev
+	perl
+"
+
+# Sultan kernel source: tag 16.0.0-sultan from kerneltoast/android_kernel_google_zuma
+_commit="16.0.0-sultan"
+source="
+	https://github.com/kerneltoast/android_kernel_google_zuma/archive/refs/tags/$_commit.tar.gz
+	$_config
+"
+builddir="$srcdir/android_kernel_google_zuma-$_commit"
+
+prepare() {
+	default_prepare
+	REPLACE_GCCH=0 . downstreamkernel_prepare "$srcdir" "$builddir" "$_config" "$_flavor" "$CARCH"
+}
+
+build() {
+	unset LDFLAGS
+	make O="$builddir/out" \
+		ARCH=arm64 \
+		CC="${CC:-gcc}" \
+		CROSS_COMPILE="${CROSS_COMPILE:-aarch64-linux-gnu-}" \
+		-j"$(nproc)" \
+		Image.gz dtbs modules
+}
+
+package() {
+	downstreamkernel_package "$builddir" "$pkgdir" arm64 "$_flavor"
+	make O="$builddir/out" \
+		ARCH=arm64 \
+		INSTALL_MOD_PATH="$pkgdir" \
+		modules_install
+}
+
+sha512sums="
+SKIP  16.0.0-sultan.tar.gz
+SKIP  $_config
+"

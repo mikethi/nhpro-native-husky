@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=NHPro System Manager
+Comment=Live CPU and radio monitor with performance and kill-switch toggles
+Exec=nhpro-system-manager
+Icon=preferences-system
+Terminal=false
+Categories=System;Settings;
+Keywords=cpu;memory;wifi;bluetooth;cell;radio;performance;nhpro;
+StartupNotify=false
