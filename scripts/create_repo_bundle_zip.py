@@ -62,7 +62,7 @@ def download_links(url_locations: dict[str, list[str]], destination: Path) -> li
                     "url": url,
                     "referenced_by": sorted(set(referenced_by)),
                     "status": "skipped",
-                    "error": "url contains ASCII control characters",
+                    "error": "URL contains ASCII control characters",
                 }
             )
             continue
