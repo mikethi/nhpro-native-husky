@@ -57,19 +57,32 @@ partition = "userdata"
 image     = "${image}.img"
 optional  = false
 
+# ── Bootloader and radio partitions: intentionally NOT flashed ────────────────
+#
+# The Google Pixel ABL (Android Bootloader, e.g. bootloader-husky-ripcurrent-*)
+# is a proprietary Android firmware component.  When flashed it:
+#   • enforces Android Verified Boot (AVB) and injects the version-specific
+#     identifier androidboot.bootloader=<version> into the kernel cmdline
+#   • gates key derivation on its own "boot security level" (androidboot.vbmeta.*)
+#
+# Native Linux does not use Android's verified-boot chain or its boot-level
+# security model.  The Linux kernel's own security mechanisms (dm-verity,
+# IMA, LSM/SELinux, etc.) are independent of the ABL version.  Flashing a
+# version-locked ABL would only tie the device to a specific Google firmware
+# build without providing any benefit for a Linux-only installation.
+#
+# The radio partition (cellular modem firmware, e.g. radio-husky-g5300i-*)
+# is similarly managed separately from the OS image and must only be updated
+# with a known-good factory image; it is never part of a routine OS flash.
+#
+# Both partitions are therefore permanently excluded from this flash config.
+# Do NOT add bootloader or radio entries here.  See flash-husky.sh for the
+# enforcement guard that will reject them even if accidentally re-added.
+#
 # ── Full factory-image reset (commented out) ──────────────────────────────────
 # Uncomment and adjust paths after extracting a Pixel factory ZIP to flash every
 # partition required for a clean baseline before installing NetHunter Pro.
-#
-# [[flash.targets]]
-# partition = "bootloader"
-# image     = "factory/bootloader-husky-<version>.img"
-# optional  = false
-#
-# [[flash.targets]]
-# partition = "radio"
-# image     = "factory/radio-husky-<version>.img"
-# optional  = false
+# NOTE: even in factory-reset mode, bootloader and radio are excluded above.
 #
 # [[flash.targets]]
 # partition = "vendor"

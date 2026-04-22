@@ -175,6 +175,47 @@ run_fastboot() {
   fi
 }
 
+# ── bootloader / radio partition guard ───────────────────────────────────────
+# The Google ABL (Android Bootloader, e.g. bootloader-husky-ripcurrent-*) injects
+# the version-specific identifier androidboot.bootloader=<version> and enforces
+# Android Verified Boot (AVB / boot security levels).  Native Linux does not use
+# Android's boot-level security chain, so flashing a proprietary, version-locked
+# ABL provides no benefit and needlessly ties the device to a specific Google
+# firmware build.  The radio firmware is similarly managed outside OS flashing.
+#
+# If a "bootloader" or "radio" partition entry appears in the flash config this
+# script aborts with an explanation rather than silently flashing it.
+check_no_abl_partitions() {
+  local toml_file="$1"
+  local forbidden
+  forbidden="$(awk '
+    /^\[\[flash\.targets\]\]/ { in_target=1; next }
+    /^\[/ && !/^\[\[flash\.targets\]\]/ { in_target=0; next }
+    /^[[:space:]]*(#|$)/ { next }
+    in_target && /^[[:space:]]*partition[[:space:]]*=/ {
+      match($0, /=[[:space:]]*"([^"]*)"/, arr)
+      p = arr[1]
+      if (p == "bootloader" || p == "radio") print p
+    }
+  ' "${toml_file}")"
+  if [[ -n "${forbidden}" ]]; then
+    echo "" >&2
+    echo "[!] ABORT: flash config contains a forbidden partition entry:" >&2
+    while IFS= read -r p; do
+      echo "      partition = \"${p}\"" >&2
+    done <<< "${forbidden}"
+    echo "" >&2
+    echo "    The Google ABL (bootloader partition) embeds a version-specific" >&2
+    echo "    identifier (androidboot.bootloader=ripcurrent-<ver>) and enforces" >&2
+    echo "    Android Verified Boot.  Native Linux does not use this security" >&2
+    echo "    chain.  Remove the '${forbidden}' entry from the flash config." >&2
+    echo "" >&2
+    exit 1
+  fi
+}
+
+check_no_abl_partitions "${config}"
+
 # ── main flash loop ───────────────────────────────────────────────────────────
 echo ""
 echo "══════════════════════════════════════════════════════════"
