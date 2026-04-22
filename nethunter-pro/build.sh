@@ -153,12 +153,13 @@ ensure_docker_running() {
   # The Docker CLI checks ServerInfo.OSType before every `docker run`; if it is
   # empty or unrecognised the run fails with "unknown server OS:".
   local docker_unix_sock="unix:///var/run/docker.sock"
+  local docker_sock_path="/var/run/docker.sock"
   # Maximum one-second polling iterations while waiting for dockerd to start.
   local docker_start_retries=10
 
   check_docker_os() {
     local os
-    os="$(docker info --format '{{.OSType}}' 2>/dev/null)" || return 1
+    os="$(${DOCKER_SUDO:-} docker info --format '{{.OSType}}' 2>/dev/null)" || return 1
     [ "${os}" = "linux" ] || [ "${os}" = "windows" ]
   }
 
@@ -177,6 +178,18 @@ ensure_docker_running() {
       export DOCKER_HOST="${docker_unix_sock}"
       echo "[+] Using native Docker socket (${docker_unix_sock})."
       return 0
+    fi
+
+    # If the socket file exists but is not readable without root, the daemon is
+    # already running – we just need elevated access.  Avoid a pointless restart.
+    if [ -S "${docker_sock_path}" ]; then
+      if DOCKER_SUDO=sudo check_docker_os 2>/dev/null; then
+        export DOCKER_SUDO=sudo
+        echo "[+] Docker daemon is running (using sudo for socket access)."
+        echo "[!] Tip: to run without sudo, add your user to the docker group:"
+        echo "[!]   sudo usermod -aG docker \${USER}  &&  newgrp docker"
+        return 0
+      fi
     fi
 
     # Daemon not reachable at all – try starting it.
@@ -198,6 +211,13 @@ ensure_docker_running() {
         echo "[+] Docker daemon started (using ${docker_unix_sock})."
         return 0
       fi
+      if DOCKER_SUDO=sudo check_docker_os 2>/dev/null; then
+        export DOCKER_SUDO=sudo
+        echo "[+] Docker daemon started (using sudo for socket access)."
+        echo "[!] Tip: to run without sudo, add your user to the docker group:"
+        echo "[!]   sudo usermod -aG docker \${USER}  &&  newgrp docker"
+        return 0
+      fi
     done
 
     echo "[!] Docker daemon is not reachable in WSL." >&2
@@ -215,12 +235,14 @@ ensure_docker_running() {
   exit 1
 }
 
+DOCKER_SUDO=""
+
 if [ "${use_docker}" ]; then
   ensure_docker_running
 
   DOCKER_KVM_ARG=""
   DOCKER_SERVER_OS=""
-  if DOCKER_SERVER_OS="$(docker version --format '{{.Server.Os}}' 2>/dev/null)"; then
+  if DOCKER_SERVER_OS="$(${DOCKER_SUDO:-} docker version --format '{{.Server.Os}}' 2>/dev/null)"; then
     if [ -z "${DOCKER_SERVER_OS}" ]; then
       echo "[!] Warning: Docker server did not report its OS; skipping /dev/kvm passthrough."
     fi
@@ -231,7 +253,7 @@ if [ "${use_docker}" ]; then
     DOCKER_KVM_ARG="--device /dev/kvm"
   fi
 
-  DEBOS_CMD="docker run --rm --interactive --tty \
+  DEBOS_CMD="${DOCKER_SUDO:-} docker run --rm --interactive --tty \
     ${DOCKER_KVM_ARG} \
     --workdir /recipes \
     --mount type=bind,source=$(pwd),destination=/recipes \
