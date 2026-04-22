@@ -4,17 +4,23 @@
 pkgname=device-google-husky
 pkgver=1
 pkgrel=0
-pkgdesc="Google Pixel 8 Pro (husky) – bare-metal postmarketOS device package"
+pkgdesc="Google Pixel 8 Pro (husky) – postmarketOS device package"
 url="https://postmarketos.org"
 arch="aarch64"
 license="MIT"
 depends="
 	postmarketos-base
-	linux-google-husky
+	linux-google-husky-sultan
 "
 makedepends="devicepkg-dev"
 subpackages="$pkgname-nonfree-firmware:nonfree_firmware"
-source="deviceinfo"
+source="
+	deviceinfo
+	firmware/50-husky-firmware.rules
+	firmware/husky-modprobe.conf
+	firmware/husky-modules.conf
+	firmware/README.md
+"
 
 build() {
 	devicepkg_build $startdir $pkgname
@@ -26,11 +32,36 @@ package() {
 
 nonfree_firmware() {
 	pkgdesc="Google Pixel 8 Pro (husky) firmware blobs (non-free)"
-	# Populate once firmware-google-husky is packaged separately
-	depends=""
-	mkdir "$subpkgdir"
+	# Firmware required for full no-HAL operation on the Tensor G3 (zuma) SoC.
+	# All hardware is accessed directly via kernel interfaces:
+	#   WiFi/BT  → nl80211 / HCI  (no WLAN HAL)
+	#   Display  → DRM/KMS        (no gralloc HAL)
+	#   Audio    → ALSA/ASoC      (no AudioFlinger HAL)
+	#   Camera   → V4L2           (no camera HAL)
+	#   Modem    → ModemManager   (no RIL HAL)
+	#   Input    → /dev/input     (no input HAL)
+	depends="
+		linux-firmware
+		linux-firmware-samsung
+	"
+
+	# udev rules: trigger module loads for every firmware-backed subsystem
+	install -Dm644 "$srcdir"/50-husky-firmware.rules \
+		"$subpkgdir"/usr/lib/udev/rules.d/50-husky-firmware.rules
+
+	# modprobe.d: per-driver options keyed to bare-metal hardware values
+	# (UART base 0x10870000, GIC 0x10400000, SCSC mx140, PVR rogue.fw, …)
+	install -Dm644 "$srcdir"/husky-modprobe.conf \
+		"$subpkgdir"/etc/modprobe.d/husky.conf
+
+	# modules-load.d: full set of modules to load at boot (no HAL)
+	install -Dm644 "$srcdir"/husky-modules.conf \
+		"$subpkgdir"/etc/modules-load.d/husky.conf
 }
 
 sha512sums="
 SKIP  deviceinfo
+SKIP  50-husky-firmware.rules
+SKIP  husky-modprobe.conf
+SKIP  husky-modules.conf
 "

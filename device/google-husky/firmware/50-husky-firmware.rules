@@ -1,0 +1,81 @@
+# Google Pixel 8 Pro (husky) – udev firmware rules
+# SoC: Google Tensor G3 (zuma / Exynos GS301)
+# No HAL: all firmware is loaded directly by kernel drivers via request_firmware().
+# Bare-metal addresses match husky.dts (UART 0x10870000, GIC 0x10400000).
+
+# ---------------------------------------------------------------------------
+# Samsung SCSC WiFi/BT combo (S5400, mx140 firmware)
+# Firmware path: /lib/firmware/scsc/mx140/
+# ---------------------------------------------------------------------------
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="scsc_wlan", \
+    RUN{builtin}+="kmod load scsc_wlan"
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="scsc_bt", \
+    RUN{builtin}+="kmod load scsc_bt"
+
+# ---------------------------------------------------------------------------
+# Imagination PowerVR BXM-8-256 GPU (pvrsrvkm)
+# Firmware path: /lib/firmware/pvr/
+# Used directly via DRM/KMS – no gralloc HAL.
+# ---------------------------------------------------------------------------
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="pvrsrvkm", \
+    RUN{builtin}+="kmod load pvrsrvkm"
+
+# ---------------------------------------------------------------------------
+# Samsung ABOX audio DSP
+# Accessed via ALSA/ASoC directly – no AudioFlinger HAL.
+# ---------------------------------------------------------------------------
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="samsung-abox", \
+    RUN{builtin}+="kmod load snd_soc_samsung_abox"
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="samsung-abox-gic", \
+    RUN{builtin}+="kmod load snd_soc_samsung_abox_gic"
+
+# ---------------------------------------------------------------------------
+# Shannon cellular modem IPC
+# Accessed via ModemManager / ofono – no RIL HAL.
+# ---------------------------------------------------------------------------
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="modem_if", \
+    RUN{builtin}+="kmod load modem_if"
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="cpif", \
+    RUN{builtin}+="kmod load cpif"
+
+# ---------------------------------------------------------------------------
+# Samsung Pablo ISP (camera)
+# Accessed via V4L2 directly – no camera HAL.
+# ---------------------------------------------------------------------------
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="pablo-icpu", \
+    RUN{builtin}+="kmod load pablo_icpu"
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="is-sensor", \
+    RUN{builtin}+="kmod load is_sensor_module"
+
+# ---------------------------------------------------------------------------
+# Google/Samsung NPU (EdgeTPU / Tensor Processing Unit)
+# ---------------------------------------------------------------------------
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="abrolhos", \
+    RUN{builtin}+="kmod load abrolhos"
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="exynos-npu", \
+    RUN{builtin}+="kmod load exynos_npu"
+
+# ---------------------------------------------------------------------------
+# Samsung SEC touchscreen (sec_ts)
+# Input events exposed via /dev/input – no touch HAL.
+# ---------------------------------------------------------------------------
+ACTION=="add", SUBSYSTEM=="i2c", DRIVER=="sec_ts", \
+    RUN{builtin}+="kmod load sec_ts"
+
+# ---------------------------------------------------------------------------
+# USB-C / DWC3 + Exynos USB PHY
+# ---------------------------------------------------------------------------
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="exynos-dwusb", \
+    RUN{builtin}+="kmod load dwc3_exynos"
+
+# ---------------------------------------------------------------------------
+# Samsung Exynos Thermal Management Unit
+# ---------------------------------------------------------------------------
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="exynos-tmu", \
+    RUN{builtin}+="kmod load exynos_tmu"
+
+# ---------------------------------------------------------------------------
+# UFS storage (exynos-ufs)
+# ---------------------------------------------------------------------------
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="exynos-ufs", \
+    RUN{builtin}+="kmod load ufs_exynos"
