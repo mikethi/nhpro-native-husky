@@ -1,16 +1,32 @@
 #!/bin/sh
 # nhpro-radio-toggle – per-radio and all-radio kill-switch for NHPro/husky
 #
-# Turning a radio OFF performs a full stack teardown in order:
-#   1. Disconnect / stop the userspace service (NetworkManager, bluetoothd,
-#      ModemManager) so no daemon is left holding the device open.
-#   2. Bring the kernel network interface down (wifi).
-#   3. rfkill soft-block the hardware so the transceiver stops emitting.
+# Each radio OFF performs a two-tier teardown:
+#   PRIMARY  – stop the userspace daemon (NetworkManager / bluetoothd /
+#              ModemManager) so the kernel device is fully released, then
+#              rfkill soft-block the transceiver.
+#   FALLBACK – if systemctl is unavailable or the interface is still visible
+#              after the primary path, use the softer nmcli/ip-link approach
+#              that was the original implementation.
 #
-# Turning a radio ON reverses the sequence:
+# Each radio ON reverses the sequence:
 #   1. rfkill unblock (restores hardware power).
-#   2. Bring the interface up / start the daemon.
-#   3. Let the stack reconnect automatically.
+#   2. Restart the daemon (unless a monitor-mode / airodump session is active
+#      on the WiFi adapter – see wifi_in_monitor_mode / wifi_audit_active).
+#   3. Fallback: if the interface is still down after the primary path, bring
+#      it up manually via nmcli/ip-link.
+#
+# Monitor-mode / airodump awareness (WiFi only):
+#   The script will NOT restart NetworkManager or bring the managed interface
+#   up in managed mode when any of the following are detected:
+#     • The interface (or any wlanXmon / mon0 interface) reports 'type monitor'
+#       via 'iw dev'.
+#     • The interface has the PROMISC flag set (promiscuous / raw-capture mode).
+#     • One of airodump-ng, airmon-ng, aireplay-ng, airbase-ng, airgraph-ng,
+#       or wash is currently running.
+#   In those cases rfkill is still applied (you explicitly asked to turn the
+#   radio off) but NM is left alone on re-enable so the audit session can
+#   resume cleanly.
 #
 # Usage:
 #   nhpro-radio-toggle wifi      on|off
@@ -27,109 +43,210 @@ set -e
 rfkill_block()   { rfkill block   "$1" 2>/dev/null || true; }
 rfkill_unblock() { rfkill unblock "$1" 2>/dev/null || true; }
 
-# rfkill type for cellular is 'wwan'
 cell_rfkill_type=wwan
 
-# Bring a network interface down/up if it exists
+have_systemctl() { command -v systemctl >/dev/null 2>&1; }
+have_nmcli()     { command -v nmcli     >/dev/null 2>&1; }
+have_iw()        { command -v iw        >/dev/null 2>&1; }
+have_mmcli()     { command -v mmcli     >/dev/null 2>&1; }
+
+iface_exists() { ip link show "$1" >/dev/null 2>&1; }
+iface_is_up()  { ip link show "$1" 2>/dev/null | grep -qw 'state UP'; }
+
 iface_down() {
     iface="$1"
-    if ip link show "$iface" >/dev/null 2>&1; then
-        ip link set "$iface" down 2>/dev/null || true
-    fi
+    iface_exists "$iface" && ip link set "$iface" down 2>/dev/null || true
 }
 
 iface_up() {
     iface="$1"
-    if ip link show "$iface" >/dev/null 2>&1; then
-        ip link set "$iface" up 2>/dev/null || true
-    fi
+    iface_exists "$iface" && ip link set "$iface" up 2>/dev/null || true
 }
 
-# Discover the first wireless interface name (usually wlan0)
+# First wireless interface (wlan0, wlp*, etc.)
 wifi_iface() {
-    for iface in /sys/class/net/wlan* /sys/class/net/wlp*; do
-        [ -e "$iface" ] || continue
-        basename "$iface"
+    for d in /sys/class/net/wlan* /sys/class/net/wlp*; do
+        [ -e "$d" ] || continue
+        basename "$d"
         return
     done
-    echo "wlan0"  # fallback
+    printf 'wlan0'
+}
+
+# ── Monitor-mode / airodump detection ────────────────────────────────────────
+#
+# Returns 0 (true) if the WiFi adapter is currently in use by audit tools
+# or is set to monitor / promiscuous mode.
+
+wifi_in_monitor_mode() {
+    iface="${1:-$(wifi_iface)}"
+
+    if have_iw; then
+        # Check primary interface
+        if iw dev "$iface" info 2>/dev/null | grep -q 'type monitor'; then
+            return 0
+        fi
+        # Check any monitor virtual interface: wlan0mon, wlan1mon, mon0, mon1…
+        for d in /sys/class/net/mon* /sys/class/net/wlan*mon; do
+            [ -e "$d" ] || continue
+            mname=$(basename "$d")
+            if iw dev "$mname" info 2>/dev/null | grep -q 'type monitor'; then
+                return 0
+            fi
+        done
+    fi
+
+    # PROMISC flag set = raw packet capture mode (tcpdump, airodump via vif)
+    if ip link show "$iface" 2>/dev/null | grep -qw PROMISC; then
+        return 0
+    fi
+
+    return 1
+}
+
+wifi_audit_active() {
+    for tool in airodump-ng airmon-ng aireplay-ng airbase-ng airgraph-ng \
+                wash reaver bully mdk3 mdk4 wifite; do
+        pgrep -x "$tool" >/dev/null 2>&1 && return 0
+    done
+    return 1
+}
+
+# Combined: true when NM should be left alone
+wifi_managed_mode_safe() {
+    wifi_in_monitor_mode "$1" && return 1   # monitor mode → NOT safe to restart NM
+    wifi_audit_active             && return 1   # audit tool running → NOT safe
+    return 0                                    # safe to restart NM
 }
 
 # ── WiFi teardown / bring-up ──────────────────────────────────────────────────
 
 wifi_off() {
     iface=$(wifi_iface)
-    # 1. Tell NetworkManager to drop the connection (if nmcli is present)
-    if command -v nmcli >/dev/null 2>&1; then
-        nmcli radio wifi off 2>/dev/null || true
+
+    # PRIMARY: stop NetworkManager cleanly (releases the device entirely)
+    if have_systemctl; then
+        systemctl stop NetworkManager.service 2>/dev/null || true
     fi
-    # 2. Bring the kernel interface down so no traffic can leak
+
+    # Bring the kernel interface down so no traffic can leak while rfkill settles
     iface_down "$iface"
-    # 3. rfkill soft-block the transceiver
+
+    # Tear down any active monitor virtual interfaces
+    if have_iw; then
+        for d in /sys/class/net/mon* /sys/class/net/wlan*mon; do
+            [ -e "$d" ] || continue
+            mname=$(basename "$d")
+            iw dev "$mname" del 2>/dev/null || true
+        done
+    fi
+
+    # rfkill soft-block (transceiver off)
     rfkill_block wifi
+
+    # FALLBACK: if interface is somehow still up, use the softer nmcli path
+    if iface_is_up "$iface"; then
+        have_nmcli && nmcli radio wifi off 2>/dev/null || true
+        iface_down "$iface"
+    fi
 }
 
 wifi_on() {
     iface=$(wifi_iface)
-    # 1. rfkill unblock so the hardware is powered
+
+    # rfkill unblock first – hardware must be powered before anything else
     rfkill_unblock wifi
-    # 2. Bring the kernel interface back up
-    iface_up "$iface"
-    # 3. Tell NetworkManager to resume (auto-reconnects to saved networks)
-    if command -v nmcli >/dev/null 2>&1; then
-        nmcli radio wifi on 2>/dev/null || true
+
+    # If an audit session was in progress, leave NM alone and just unblock
+    if ! wifi_managed_mode_safe "$iface"; then
+        printf 'nhpro-radio-toggle: WiFi unblocked (monitor/audit session preserved)\n'
+        return
+    fi
+
+    # PRIMARY: restart NetworkManager (it will bring the interface up itself)
+    if have_systemctl; then
+        systemctl start NetworkManager.service 2>/dev/null || true
+    fi
+
+    # FALLBACK: if NM didn't come up or is unavailable, bring the interface
+    # up manually and ask nmcli to enable wifi
+    if ! iface_is_up "$iface"; then
+        iface_up "$iface"
+        have_nmcli && nmcli radio wifi on 2>/dev/null || true
     fi
 }
 
 # ── Bluetooth teardown / bring-up ─────────────────────────────────────────────
 
 bt_off() {
-    # 1. Stop bluetoothd – this cleanly disconnects all paired devices and
-    #    removes the HCI interface before we cut the hardware.
-    if command -v systemctl >/dev/null 2>&1; then
+    # PRIMARY: stop bluetoothd (cleanly disconnects paired devices, removes HCI)
+    if have_systemctl; then
         systemctl stop bluetooth.service 2>/dev/null || true
     fi
-    # 2. rfkill soft-block
+
+    # rfkill soft-block
     rfkill_block bluetooth
+
+    # FALLBACK: if bluetoothd is still running (no systemctl), try direct kill
+    if pgrep -x bluetoothd >/dev/null 2>&1; then
+        kill "$(pgrep -x bluetoothd)" 2>/dev/null || true
+    fi
 }
 
 bt_on() {
-    # 1. rfkill unblock first so the HCI device appears when bluetoothd starts
+    # rfkill unblock first so the HCI device appears when bluetoothd starts
     rfkill_unblock bluetooth
-    # 2. Start bluetoothd
-    if command -v systemctl >/dev/null 2>&1; then
+
+    # PRIMARY: start bluetoothd via systemd
+    if have_systemctl; then
         systemctl start bluetooth.service 2>/dev/null || true
+        return
+    fi
+
+    # FALLBACK: start bluetoothd directly if systemctl is unavailable
+    if command -v bluetoothd >/dev/null 2>&1; then
+        bluetoothd --nodetach 2>/dev/null &
     fi
 }
 
 # ── Cell (wwan / ModemManager) teardown / bring-up ───────────────────────────
 
 modem_id() {
-    if command -v mmcli >/dev/null 2>&1; then
-        mmcli -L 2>/dev/null \
-            | grep -oE '/org/freedesktop/ModemManager[0-9]*/Modem/[0-9]+' \
-            | head -1
-    fi
+    have_mmcli || return
+    mmcli -L 2>/dev/null \
+        | grep -oE '/org/freedesktop/ModemManager[0-9]*/Modem/[0-9]+' \
+        | head -1
 }
 
 cell_off() {
-    # 1. Tell ModemManager to disable the modem (drops data bearer, deregisters
-    #    from network) before we cut the rfkill line.
-    mid=$(modem_id)
-    if [ -n "$mid" ]; then
-        mmcli --modem="$mid" --disable 2>/dev/null || true
+    # PRIMARY: disable modem via MM first (drops data bearer, deregisters from
+    # network), then stop the ModemManager daemon, then rfkill the transceiver.
+    if have_mmcli; then
+        mid=$(modem_id)
+        [ -n "$mid" ] && mmcli --modem="$mid" --disable 2>/dev/null || true
     fi
-    # 2. rfkill soft-block the wwan transceiver
+
+    if have_systemctl; then
+        systemctl stop ModemManager.service 2>/dev/null || true
+    fi
+
     rfkill_block "$cell_rfkill_type"
 }
 
 cell_on() {
-    # 1. rfkill unblock so the modem hardware is powered and visible to MM
+    # rfkill unblock first so the modem hardware is visible
     rfkill_unblock "$cell_rfkill_type"
-    # 2. Enable the modem through ModemManager (re-registers on network)
-    mid=$(modem_id)
-    if [ -n "$mid" ]; then
-        mmcli --modem="$mid" --enable 2>/dev/null || true
+
+    # PRIMARY: restart ModemManager; it will re-detect and initialise the modem
+    if have_systemctl; then
+        systemctl start ModemManager.service 2>/dev/null || true
+    fi
+
+    # FALLBACK: if MM is already running (wasn't stopped) or just started,
+    # explicitly enable the modem so it re-registers on the network
+    if have_mmcli; then
+        mid=$(modem_id)
+        [ -n "$mid" ] && mmcli --modem="$mid" --enable 2>/dev/null || true
     fi
 }
 
@@ -142,13 +259,23 @@ print_status() {
             [ -f "$dev/type" ] || continue
             dev_type=$(cat "$dev/type")
             [ "$dev_type" = "$type" ] || continue
-            soft=$(cat "$dev/soft" 2>/dev/null || echo 0)
+            soft=$(cat "$dev/soft" 2>/dev/null || printf '0')
             [ "$soft" = "1" ] && blocked="blocked (off)"
         done
         label="$type"
         [ "$type" = "$cell_rfkill_type" ] && label="cell (wwan)"
         printf '%-20s: %s\n' "$label" "$blocked"
     done
+
+    # Show active monitor interfaces if any
+    if have_iw; then
+        for d in /sys/class/net/mon* /sys/class/net/wlan*mon; do
+            [ -e "$d" ] || continue
+            mname=$(basename "$d")
+            iw dev "$mname" info 2>/dev/null | grep -q 'type monitor' || continue
+            printf '%-20s: monitor mode (audit interface)\n' "$mname"
+        done
+    fi
 }
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -180,13 +307,13 @@ case "$radio" in
         ;;
     all)
         case "$state" in
-            off) # Ordered teardown: services first, then rfkill last
+            off) # Ordered teardown: daemons first, rfkill last, per radio
                  wifi_off
                  bt_off
                  cell_off
                  printf 'nhpro-radio-toggle: all radios off\n' ;;
-            on)  # Ordered bring-up: rfkill unblock first (inside each *_on),
-                 # then services
+            on)  # Ordered bring-up: rfkill unblock inside each *_on first,
+                 # then daemon restart
                  cell_on
                  bt_on
                  wifi_on
