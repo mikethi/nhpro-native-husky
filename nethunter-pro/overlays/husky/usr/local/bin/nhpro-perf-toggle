@@ -1,0 +1,123 @@
+#!/bin/sh
+# nhpro-perf-toggle – live CPU performance-mode switcher for NHPro/husky
+#
+# Modes
+#   uncapped  – removes OEM scheduler caps; enables full CPU headroom for
+#               penetration-testing workloads (matches init.zuma.rc at boot).
+#   stock     – restores the OEM conservative scheduler policy.
+#
+# Usage:
+#   nhpro-perf-toggle uncapped
+#   nhpro-perf-toggle stock
+#   nhpro-perf-toggle status
+#
+# Writes take effect immediately (no reboot required).
+# The chosen mode is persisted to /etc/nhpro/perf-mode and re-applied on
+# every subsequent boot by nhpro-perf-mode.service.
+
+set -e
+
+CONFIG_FILE=/etc/nhpro/perf-mode
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+syswrite() {
+    path="$1"; value="$2"
+    if [ -e "$path" ]; then
+        printf '%s' "$value" > "$path" 2>/dev/null || true
+    fi
+}
+
+apply_uncapped() {
+    # sched_pelt_multiplier: 4 = full-speed load tracking
+    syswrite /proc/sys/kernel/sched_pelt_multiplier 4
+
+    # uclamp_max: remove OEM per-group utilisation caps (1024 = uncapped)
+    syswrite /proc/vendor_sched/auto_uclamp_max \
+        "1024 1024 1024 1024 1024 1024 1024 1024 1024"
+    syswrite /proc/vendor_sched/groups/bg/uclamp_max      1024
+    syswrite /proc/vendor_sched/groups/sys_bg/uclamp_max  1024
+    syswrite /proc/vendor_sched/groups/ota/uclamp_max     1024
+
+    # uclamp_max_filter: disabled
+    syswrite /proc/vendor_sched/uclamp_max_filter_enable  0
+
+    # PMU-based adaptive frequency limits: enabled on all clusters
+    syswrite /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/pmu_limit_enable 1
+    syswrite /sys/devices/system/cpu/cpufreq/policy4/sched_pixel/pmu_limit_enable 1
+    syswrite /sys/devices/system/cpu/cpufreq/policy8/sched_pixel/pmu_limit_enable 1
+}
+
+apply_stock() {
+    # sched_pelt_multiplier: 2 = OEM default
+    syswrite /proc/sys/kernel/sched_pelt_multiplier 2
+
+    # uclamp_max: restore OEM conservative caps
+    syswrite /proc/vendor_sched/auto_uclamp_max \
+        "1024 1024 1024 1024 1024 800 800 800 800"
+    syswrite /proc/vendor_sched/groups/bg/uclamp_max      130
+    syswrite /proc/vendor_sched/groups/sys_bg/uclamp_max  512
+    syswrite /proc/vendor_sched/groups/ota/uclamp_max     512
+
+    # uclamp_max_filter: enabled (OEM second-layer throttle)
+    syswrite /proc/vendor_sched/uclamp_max_filter_enable  1
+
+    # PMU-based adaptive frequency limits: disabled on all clusters
+    syswrite /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/pmu_limit_enable 0
+    syswrite /sys/devices/system/cpu/cpufreq/policy4/sched_pixel/pmu_limit_enable 0
+    syswrite /sys/devices/system/cpu/cpufreq/policy8/sched_pixel/pmu_limit_enable 0
+}
+
+print_status() {
+    saved="unknown"
+    if [ -f "$CONFIG_FILE" ]; then
+        saved=$(cat "$CONFIG_FILE")
+    fi
+
+    pelt="?"
+    if [ -f /proc/sys/kernel/sched_pelt_multiplier ]; then
+        pelt=$(cat /proc/sys/kernel/sched_pelt_multiplier)
+    fi
+
+    bg_ucl="?"
+    if [ -f /proc/vendor_sched/groups/bg/uclamp_max ]; then
+        bg_ucl=$(cat /proc/vendor_sched/groups/bg/uclamp_max)
+    fi
+
+    pmu0="?"
+    if [ -f /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/pmu_limit_enable ]; then
+        pmu0=$(cat /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/pmu_limit_enable)
+    fi
+
+    printf 'Saved mode           : %s\n' "$saved"
+    printf 'sched_pelt_multiplier: %s\n' "$pelt"
+    printf 'bg/uclamp_max        : %s\n' "$bg_ucl"
+    printf 'pmu_limit_enable[0]  : %s\n' "$pmu0"
+}
+
+persist() {
+    mkdir -p /etc/nhpro
+    printf '%s\n' "$1" > "$CONFIG_FILE"
+}
+
+# ── main ──────────────────────────────────────────────────────────────────────
+
+case "${1:-}" in
+    uncapped)
+        apply_uncapped
+        persist uncapped
+        printf 'nhpro-perf-toggle: mode set to uncapped (live + persisted)\n'
+        ;;
+    stock)
+        apply_stock
+        persist stock
+        printf 'nhpro-perf-toggle: mode set to stock (live + persisted)\n'
+        ;;
+    status)
+        print_status
+        ;;
+    *)
+        printf 'Usage: nhpro-perf-toggle {uncapped|stock|status}\n' >&2
+        exit 1
+        ;;
+esac
