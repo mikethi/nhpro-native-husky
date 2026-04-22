@@ -19,6 +19,7 @@ source="
 	firmware/50-husky-firmware.rules
 	firmware/husky-modprobe.conf
 	firmware/husky-modules.conf
+	firmware/README.md
 "
 
 build() {
