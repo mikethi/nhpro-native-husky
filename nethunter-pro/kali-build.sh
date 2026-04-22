@@ -62,7 +62,7 @@ DISTRO_VERSION="${VERSION_ID:-unknown}"
 echo "    Distro: ${PRETTY_NAME:-${DISTRO_ID}}"
 
 # Accept kali, debian, or ubuntu (debos dependencies are Debian-based)
-if [[ "${DISTRO_ID}" != "kali" && "${DISTRO_LIKE}" != *"debian"* && "${DISTRO_LIKE}" != *"ubuntu"* && "${DISTRO_ID}" != "debian" && "${DISTRO_ID}" != "ubuntu" ]]; then
+if [[ "${DISTRO_ID}" != "kali" && "${DISTRO_ID}" != "debian" && "${DISTRO_ID}" != "ubuntu" && "${DISTRO_LIKE}" != *"debian"* && "${DISTRO_LIKE}" != *"ubuntu"* ]]; then
     warn "Distro '${DISTRO_ID}' is not Kali or Debian-based."
     warn "Package installation steps may fail. Proceeding anyway."
 else
@@ -215,8 +215,9 @@ if [[ "${CURRENT_USER}" != "root" ]] && ! groups | grep -qw docker; then
     warn "Adding to docker group. You will need to log out and back in"
     warn "(or run 'newgrp docker') for it to take effect in interactive sessions."
     $SUDO usermod -aG docker "${CURRENT_USER}"
-    # For this script's own process, activate the new group immediately.
-    exec sg docker -c "bash ${BASH_SOURCE[0]} $*" || true
+    # Re-exec this script under the docker group so Docker is reachable without sudo.
+    QUOTED_ARGS="$(printf '%q ' "$@")"
+    exec sg docker -c "bash ${BASH_SOURCE[0]} ${QUOTED_ARGS}" || true
     # If exec returns for any reason, continue — Docker commands may require sudo.
 fi
 
