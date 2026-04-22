@@ -70,8 +70,19 @@ fi
 
 # ── auto-detect image basename if not provided ────────────────────────────────
 if [[ -z "${image_name}" ]]; then
-  # Pick the newest nethunterpro-*-boot.img in the current directory; strip -boot.img suffix
-  latest_boot="$(ls -t nethunterpro-*-boot.img 2>/dev/null | head -1 || true)"
+  # Pick the newest nethunterpro-*-boot.img in the current directory via bash
+  # globbing (safe for filenames with spaces; images never contain spaces in
+  # practice but we avoid ls|head for correctness).
+  latest_boot=""
+  latest_mtime=0
+  for f in nethunterpro-*-boot.img; do
+    [[ -f "${f}" ]] || continue
+    mtime="$(stat -c '%Y' "${f}" 2>/dev/null || stat -f '%m' "${f}" 2>/dev/null || echo 0)"
+    if (( mtime > latest_mtime )); then
+      latest_mtime="${mtime}"
+      latest_boot="${f}"
+    fi
+  done
   if [[ -n "${latest_boot}" ]]; then
     image_name="${latest_boot%-boot.img}"
     echo "[+] Auto-detected image basename: ${image_name}"
@@ -178,8 +189,12 @@ target_count=0
 skipped_count=0
 
 while IFS= read -r target_line; do
-  # Parse the fields emitted by awk
-  # Each field is of the form key=value (no spaces in values)
+  # Parse the fields emitted by awk.
+  # The awk parser emits key=value tokens with no spaces inside values (partition
+  # names, image filenames, the literals "true"/"false", and slot letters are
+  # all space-free by construction).  "optional" is always the string "true" or
+  # "false" — compare it as a string, not a boolean.
+  unset fields
   declare -A fields=()
   for token in ${target_line}; do
     key="${token%%=*}"
@@ -199,12 +214,11 @@ while IFS= read -r target_line; do
 
   image_file="$(expand_image "${raw_image}")"
 
-  # Optionality check
+  # Optionality check ("optional" is the string "true" returned by the awk parser)
   if [[ ! -f "${image_file}" ]]; then
     if [[ "${optional}" == "true" ]]; then
       echo "[~] Skipping optional target '${partition}': file not found: ${image_file}"
       (( skipped_count++ )) || true
-      unset fields
       continue
     else
       echo "[!] Required image not found for partition '${partition}': ${image_file}" >&2
@@ -222,7 +236,6 @@ while IFS= read -r target_line; do
   run_fastboot "${fastboot_args[@]}"
   (( target_count++ )) || true
 
-  unset fields
 done < <(parse_flash_targets "${config}")
 
 echo ""
