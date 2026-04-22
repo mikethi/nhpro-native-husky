@@ -1,0 +1,16 @@
+[Unit]
+Description=NHPro CPU performance mode restore
+Documentation=man:nhpro-perf-toggle(1)
+# Run after the network and multi-user targets are up, but before the
+# display manager starts so the correct mode is active before Phosh loads.
+After=multi-user.target
+Before=display-manager.service
+ConditionPathExists=/etc/nhpro/perf-mode
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/nhpro-perf-toggle restore-saved
+
+[Install]
+WantedBy=multi-user.target

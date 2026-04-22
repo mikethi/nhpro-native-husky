@@ -65,7 +65,7 @@ display_help() {
   exit 0
 }
 
-while getopts "dDvcszCZrR:e:H:u:p:M:m:V:f:h:x:g:" opt; do
+while getopts ":dDvcszCZrR:e:H:u:p:M:m:V:f:h:x:g:" opt; do
   case "${opt}" in
     d) use_docker=1 ;;
     D) debug=1 ;;
@@ -86,7 +86,15 @@ while getopts "dDvcszCZrR:e:H:u:p:M:m:V:f:h:x:g:" opt; do
     h) EXTRA_ARGS="${EXTRA_ARGS} -e http_proxy:${OPTARG}" ;;
     x) EXTRA_ARGS="${EXTRA_ARGS} -t debian_suite:${OPTARG}" ;;
     g) EXTRA_ARGS="${EXTRA_ARGS} -t sign:${OPTARG}" ;;
-    *) display_help ;;
+    :)
+      if [ "${OPTARG}" = "e" ]; then
+        environment="phosh"
+      else
+        echo "Option -${OPTARG} requires an argument." >&2
+        display_help
+      fi
+      ;;
+    \?) display_help ;;
   esac
 done
 
@@ -140,9 +148,113 @@ ARGS="${ARGS} \
 [ "${debug}" ]        && ARGS="${ARGS} --debug-shell"
 [ "${verbose}" ]      && ARGS="${ARGS} --verbose"
 
+ensure_docker_running() {
+  # Returns 0 only when the daemon is reachable AND reports a known OS type.
+  # The Docker CLI checks ServerInfo.OSType before every `docker run`; if it is
+  # empty or unrecognised the run fails with "unknown server OS:".
+  local docker_unix_sock="unix:///var/run/docker.sock"
+  local docker_sock_path="/var/run/docker.sock"
+  # Maximum one-second polling iterations while waiting for dockerd to start.
+  local docker_start_retries=10
+
+  check_docker_os() {
+    local os
+    os="$(${DOCKER_SUDO:-} docker info --format '{{.OSType}}' 2>/dev/null)" || return 1
+    [ "${os}" = "linux" ] || [ "${os}" = "windows" ]
+  }
+
+  # Happy path – daemon up and OS type known.
+  if check_docker_os; then
+    return 0
+  fi
+
+  # Detect WSL (both WSL1 and WSL2 require manual service start).
+  if grep -qi "microsoft" /proc/version 2>/dev/null; then
+    # Docker Desktop may have set the default context to a Windows-side
+    # socket.  Try the local Unix socket first before attempting to start a
+    # native daemon – this handles the "Desktop running but wrong context"
+    # case without needing sudo.
+    if DOCKER_HOST="${docker_unix_sock}" check_docker_os 2>/dev/null; then
+      export DOCKER_HOST="${docker_unix_sock}"
+      echo "[+] Using native Docker socket (${docker_unix_sock})."
+      return 0
+    fi
+
+    # If the socket file exists but is not readable without root, the daemon is
+    # already running – we just need elevated access.  Avoid a pointless restart.
+    if [ -S "${docker_sock_path}" ]; then
+      if DOCKER_SUDO=sudo check_docker_os 2>/dev/null; then
+        export DOCKER_SUDO=sudo
+        echo "[+] Docker daemon is running (using sudo for socket access)."
+        echo "[!] Tip: to run without sudo, add your user to the docker group:"
+        echo "[!]   sudo usermod -aG docker \${USER}  &&  newgrp docker"
+        return 0
+      fi
+    fi
+
+    # Daemon not reachable at all – try starting it.
+    echo "[+] WSL detected: Docker daemon not running – attempting to start it..."
+    # containerd must be up before dockerd; starting it is a no-op if already running.
+    # Capture stderr so any startup errors are visible if the daemon never comes up.
+    local containerd_err docker_err
+    containerd_err="$(sudo service containerd start 2>&1)" || true
+    docker_err="$(sudo service docker start 2>&1)" || true
+
+    for _ in $(seq 1 "${docker_start_retries}"); do
+      sleep 1
+      if check_docker_os; then
+        echo "[+] Docker daemon started successfully."
+        return 0
+      fi
+      if DOCKER_HOST="${docker_unix_sock}" check_docker_os 2>/dev/null; then
+        export DOCKER_HOST="${docker_unix_sock}"
+        echo "[+] Docker daemon started (using ${docker_unix_sock})."
+        return 0
+      fi
+      if DOCKER_SUDO=sudo check_docker_os 2>/dev/null; then
+        export DOCKER_SUDO=sudo
+        echo "[+] Docker daemon started (using sudo for socket access)."
+        echo "[!] Tip: to run without sudo, add your user to the docker group:"
+        echo "[!]   sudo usermod -aG docker \${USER}  &&  newgrp docker"
+        return 0
+      fi
+    done
+
+    echo "[!] Docker daemon is not reachable in WSL." >&2
+    [ -n "${containerd_err}" ] && echo "[!]   containerd: ${containerd_err}" >&2
+    [ -n "${docker_err}" ]     && echo "[!]   dockerd:    ${docker_err}" >&2
+    echo "[!]   Using Docker Desktop for Windows?" >&2
+    echo "[!]     1. Start Docker Desktop on Windows." >&2
+    echo "[!]     2. In Settings → Resources → WSL Integration, enable your Kali distro." >&2
+    echo "[!]   Using native Docker (docker.io installed in WSL)?" >&2
+    echo "[!]     sudo service docker start" >&2
+    exit 1
+  fi
+
+  echo "[!] Docker daemon is not running. Start it and re-run this script." >&2
+  exit 1
+}
+
+DOCKER_SUDO=""
+
 if [ "${use_docker}" ]; then
-  DEBOS_CMD="docker run --rm --interactive --tty \
-    --device /dev/kvm \
+  ensure_docker_running
+
+  DOCKER_KVM_ARG=""
+  DOCKER_SERVER_OS=""
+  if DOCKER_SERVER_OS="$(${DOCKER_SUDO:-} docker version --format '{{.Server.Os}}' 2>/dev/null)"; then
+    if [ -z "${DOCKER_SERVER_OS}" ]; then
+      echo "[!] Warning: Docker server did not report its OS; skipping /dev/kvm passthrough."
+    fi
+  else
+    echo "[!] Warning: could not query Docker server version; skipping /dev/kvm passthrough."
+  fi
+  if [ -e /dev/kvm ] && [ "${DOCKER_SERVER_OS}" = "linux" ]; then
+    DOCKER_KVM_ARG="--device /dev/kvm"
+  fi
+
+  DEBOS_CMD="${DOCKER_SUDO:-} docker run --rm --interactive --tty \
+    ${DOCKER_KVM_ARG} \
     --workdir /recipes \
     --mount type=bind,source=$(pwd),destination=/recipes \
     --security-opt label=disable \
@@ -168,9 +280,14 @@ echo "════════════════════════�
 echo ""
 echo " Flash to Pixel 8 Pro (husky) – unlock bootloader first:"
 echo ""
-echo "   fastboot flash boot   nethunterpro-${version}-${device}-${environment}-boot.img"
-echo "   fastboot flash userdata nethunterpro-${version}-${device}-${environment}.img"
-echo "   fastboot reboot"
+echo " The flash targets are defined in:"
+echo "   nethunter-pro/devices/zuma/configs/husky.toml  ([[flash.targets]])"
+echo ""
+echo " Preview flash commands:"
+echo "   ${SCRIPT_DIR}/../scripts/flash-husky.sh --dry-run --image nethunterpro-${version}-${device}-${environment}"
+echo ""
+echo " Execute flash:"
+echo "   ${SCRIPT_DIR}/../scripts/flash-husky.sh --image nethunterpro-${version}-${device}-${environment}"
 echo ""
 echo " Default credentials:  kali / ${password}"
 echo "══════════════════════════════════════════════════════════"
