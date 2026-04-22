@@ -440,6 +440,134 @@ Full modprobe options: [`device/google-husky/firmware/husky-modprobe.conf`](devi
 
 ---
 
+## Scheduler & Frequency Tuning Parameters
+
+All values below are written by `init.zuma.rc` at boot.  Every numeric parameter
+is annotated here with its unit, percentage-of-maximum, and whether it is a
+**hardware-safety** limit (required to prevent physical damage) or an
+**OEM policy** choice (a power/battery trade-off with no safety justification).
+
+---
+
+### PELT multiplier — `/proc/sys/kernel/sched_pelt_multiplier`
+
+| Phase | Value | Meaning |
+|---|---|---|
+| `early-init` | 1 | Slowest ramp — prevents premature CPU boost during startup |
+| `sys.boot_completed=1` | **4** | Maximum — full-speed load tracking for normal operation |
+
+Scale: 1–4.  At value 1 the EAS PELT algorithm tracks task demand 4× more slowly,
+making the frequency governor under-responsive to new load.  Restored to 4 after boot.
+**Category:** OEM policy (boot optimisation only — no hardware-safety role post-boot).
+
+---
+
+### TEO idle governor — `/proc/vendor_sched/teo_util_threshold`
+
+| Parameter | Value | Meaning |
+|---|---|---|
+| Little cores (cpu0–cpu3) | 2 | Util gate ≈ 0.2 % — go deep-idle only if almost completely idle |
+| Mid cores (cpu4–cpu7) | 1024 | Disabled — always go to deepest available idle state |
+| Prime core (cpu8) | 1024 | Disabled — always go to deepest available idle state |
+
+Controls when the TEO governor considers utilisation when choosing an idle state.
+This is a **power/latency trade-off** (affects wake-up latency, not peak throughput).
+**Category:** OEM power policy.
+
+---
+
+### uclamp_max — scheduler group utilisation caps
+
+`uclamp_max` limits the scheduler's perceived utilisation for a task group.  When a
+task's demand is capped, the frequency governor will not boost above the OPP that
+corresponds to that percentage.  **Scale: 0 = 0 %, 1024 = 100 % (uncapped), −2 = kernel max.**
+
+#### Per-CPU automatic cap — `/proc/vendor_sched/auto_uclamp_max`
+
+| CPU cluster | Value (this repo) | Percentage | Was (upstream) |
+|---|---|---|---|
+| cpu0–cpu3 (Little, Klein) | **1024** | 100 % — uncapped | 130 (~12.7 %) |
+| cpu4–cpu7 (Mid, Makalu) | **1024** | 100 % — uncapped | 512 (50 %) |
+| cpu8 (Prime, MakaluELP) | **1024** | 100 % — uncapped | 670 (~65.4 %) |
+
+#### Scheduler group caps — `/proc/vendor_sched/groups/<group>/uclamp_max`
+
+| Group | Value (this repo) | Percentage | Was (upstream) | Notes |
+|---|---|---|---|---|
+| `bg` (background) | **1024** | 100 % — uncapped | 130 (~12.7 %) | Background pentest tools need full CPU access |
+| `sys_bg` (system bg) | **1024** | 100 % — uncapped | 512 (50 %) | OEM policy removed |
+| `ota` (OS updates) | **1024** | 100 % — uncapped | 512 (50 %) | OEM policy removed |
+| `dex2oat` (JIT) | −2 | uncapped | −2 (uncapped) | Unchanged |
+
+**Category:** All upstream caps were OEM battery/power policy — **no hardware-safety
+role**.  Removed.  The thermal framework (TMU + cooling devices) handles any actual
+hardware-protection throttling independently of these scheduler caps.
+
+#### uclamp_max filter — `/proc/vendor_sched/uclamp_max_filter_enable`
+
+| Parameter | Value (this repo) | Was (upstream) |
+|---|---|---|
+| `uclamp_max_filter_enable` | **0** (disabled) | 1 (enabled) |
+| `uclamp_max_filter_divider` | 4 | 4 |
+| `uclamp_max_filter_rt` | 16 | 16 |
+
+The filter was a second layer of runtime throttling that could dynamically further
+reduce group uclamp_max values.  **No hardware-safety purpose** — disabled.
+
+---
+
+### PMU-based adaptive frequency limits — `sched_pixel`
+
+These limits engage **only** when the workload is memory-bandwidth-limited.
+`spc_threshold` (stalls-per-cycle) measures how often the CPU pipeline is stalled
+waiting for DRAM.  When SPC > threshold the CPU is bottlenecked by memory, not
+compute: running faster yields no performance gain and wastes power.  The kernel
+then caps frequency at `limit_frequency` until the stall condition clears.
+
+`lcpi_threshold 0` = LCPI-based path disabled; only SPC path active.
+`pmu_limit_enable 1` = explicitly enabled (previously implicit/undocumented).
+
+| Cluster | Max freq | `spc_threshold` | `limit_frequency` | Limit (% of peak) |
+|---|---|---|---|---|
+| policy0 — Little (cpu0–cpu3, Klein) | ~2050 MHz | 76 | 1,328,000 kHz = **1.328 GHz** | ~64.8 % |
+| policy4 — Mid (cpu4–cpu7, Makalu) | ~2450 MHz | 73 | 1,836,000 kHz = **1.836 GHz** | ~74.9 % |
+| policy8 — Prime (cpu8, MakaluELP) | ~2860 MHz | 68 | 2,363,000 kHz = **2.363 GHz** | ~82.6 % |
+
+**Category:** Legitimate performance optimisation (not an OEM restriction).  For
+non-memory-bound workloads the caps never engage.  For memory-bound workloads
+they prevent wasted power at no performance cost.  The `spc_threshold` and
+`limit_frequency` values are kept from the upstream Pixel configuration.
+`pmu_poll_time 10` = PMU sampling interval, 10 ms.
+
+---
+
+### Runtime read access
+
+All `sched_pixel` sysfs nodes and `/proc/vendor_sched/*` entries are owned
+`system:system` with mode `0644` (read by any user) after the `on init` chown
+block runs.  You can inspect the live state at any time:
+
+```bash
+# Current per-policy limit frequency (kHz):
+cat /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/limit_frequency
+cat /sys/devices/system/cpu/cpufreq/policy4/sched_pixel/limit_frequency
+cat /sys/devices/system/cpu/cpufreq/policy8/sched_pixel/limit_frequency
+
+# PMU enable flags (1 = enabled):
+cat /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/pmu_limit_enable
+cat /sys/devices/system/cpu/cpufreq/policy4/sched_pixel/pmu_limit_enable
+cat /sys/devices/system/cpu/cpufreq/policy8/sched_pixel/pmu_limit_enable
+
+# Scheduler group uclamp_max (1024 = uncapped):
+cat /proc/vendor_sched/groups/bg/uclamp_max
+cat /proc/vendor_sched/groups/sys_bg/uclamp_max
+
+# PELT multiplier (should be 4 post-boot):
+cat /proc/sys/kernel/sched_pelt_multiplier
+```
+
+---
+
 ## References
 
 | Resource | Link |
