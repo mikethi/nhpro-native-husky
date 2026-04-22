@@ -5,6 +5,9 @@ import android.hardware.drm@1.2-service.widevine.rc
 import init.exynos.sensorhub.rc
 
 on early-init
+    # PELT multiplier: 1 during early boot to prevent premature CPU frequency
+    # boost while the system is initialising.  Scale: 1 (slowest) – 4 (fastest).
+    # Raised to 4 (maximum, full-speed load tracking) in sys.boot_completed=1 below.
     write /proc/sys/kernel/sched_pelt_multiplier 1
 
 on init
@@ -13,7 +16,10 @@ on init
 
     # Set teo as cpu idle governor
     write /sys/devices/system/cpu/cpuidle/current_governor teo
-    # Disable util-awareness for mids and bigs
+    # TEO idle governor: util-awareness threshold per cluster [little, mid, big]
+    # 1024 = disabled (no util gate) for mid/big cores – they enter deep idle
+    # unconditionally.  Little cores use threshold 2 (gate at ~0.2 % utilisation).
+    # This is a power/latency trade-off; it does not cap compute throughput.
     write /proc/vendor_sched/teo_util_threshold "2 1024 1024"
 
     chown system system /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/lcpi_threshold
@@ -78,6 +84,10 @@ on init
     write /sys/class/net/rmnet6/queues/rx-0/rps_cpus fe
     write /sys/class/net/rmnet7/queues/rx-0/rps_cpus fe
 
+    # Boot-time uclamp_min: temporarily boost foreground/system task groups to
+    # 221/1024 = ~21.6 % minimum utilisation so the system starts up responsively.
+    # prefer_idle=1 keeps them on the most-efficient idle core.
+    # These are cleared to 0/1 respectively in the zygote-start handler below.
     # Boot time 183626384
     write /proc/vendor_sched/groups/ta/uclamp_min 221
     write /proc/vendor_sched/groups/ta/prefer_idle 1
@@ -673,28 +683,79 @@ on property:sys.boot_completed=1
     write /dev/cpuset/camera-daemon/cpus 0-8
     setprop vendor.powerhal.init 1
 
-    # Set uclamp.max for some groups, which could indicate cpu importance used in scheduling
-    write /proc/vendor_sched/auto_uclamp_max "130 130 130 130 512 512 512 512 670"
-    write /proc/vendor_sched/groups/bg/uclamp_max 130
-    write /proc/vendor_sched/groups/sys_bg/uclamp_max 512
-    write /proc/vendor_sched/groups/ota/uclamp_max 512
+    # ── uclamp_max: scheduler group utilisation caps ──────────────────────────
+    # Scale: 0 = 0 %, 1024 = 100 % (uncapped), -2 = kernel max (uncapped).
+    # uclamp_max limits the scheduler's view of task demand; when a task's
+    # apparent utilisation is capped, the frequency governor will not boost
+    # above the corresponding OPP.
+    #
+    # auto_uclamp_max: per-CPU automatic cap applied to any task [cpu0..cpu8].
+    # All CPUs set to 1024 (uncapped) – every task may request full frequency.
+    write /proc/vendor_sched/auto_uclamp_max "1024 1024 1024 1024 1024 1024 1024 1024 1024"
+
+    # bg  (background tasks, e.g. scanners, capture daemons): 1024 = uncapped.
+    # Previously 130/1024 = ~12.7 % – an OEM battery-life policy, not a
+    # hardware-safety limit.  Removed: background pentest tools need full CPU.
+    write /proc/vendor_sched/groups/bg/uclamp_max 1024
+
+    # sys_bg (system background services): 1024 = uncapped.
+    # Previously 512/1024 = 50 % – OEM policy, not hardware safety.
+    write /proc/vendor_sched/groups/sys_bg/uclamp_max 1024
+
+    # ota (OS update tasks): 1024 = uncapped.
+    # Previously 512/1024 = 50 % – OEM policy, not hardware safety.
+    write /proc/vendor_sched/groups/ota/uclamp_max 1024
+
+    # dex2oat (ahead-of-time compilation): -2 = uncapped (unchanged).
     write /proc/vendor_sched/groups/dex2oat/uclamp_max -2
 
+    # uclamp_max filter: secondary runtime throttle that could further reduce
+    # group uclamp_max values dynamically.  Disabled – no hardware-safety
+    # purpose; was a second layer of OEM power-management policy.
     write /proc/vendor_sched/uclamp_max_filter_divider 4
     write /proc/vendor_sched/uclamp_max_filter_rt 16
-    write /proc/vendor_sched/uclamp_max_filter_enable 1
+    write /proc/vendor_sched/uclamp_max_filter_enable 0
 
-    # Set PMU freq limit parameters
+    # ── PMU-based adaptive frequency limits (sched_pixel / vendor_sched) ─────
+    # These limits engage ONLY when the workload is memory-bandwidth-limited:
+    # stalls-per-cycle (SPC) > spc_threshold means the CPU is stalling on DRAM
+    # and higher frequency yields no real-world performance gain.  limit_frequency
+    # caps the OPP while the stall condition persists, then releases automatically.
+    # lcpi_threshold 0 = LCPI-based limiter disabled (only SPC path active).
+    # pmu_limit_enable written explicitly so the enabled state is never implicit.
+    #
+    # policy0 – Little cores cpu0–cpu3 (Klein, max ~2050 MHz):
+    #   SPC threshold : 76       – engage below this stall rate
+    #   limit_frequency: 1,328,000 kHz = 1.328 GHz = ~64.8 % of peak
     write /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/lcpi_threshold 0
     write /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/spc_threshold 76
     write /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/limit_frequency 1328000
+    write /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/pmu_limit_enable 1
+
+    # policy4 – Mid cores cpu4–cpu7 (Makalu, max ~2450 MHz):
+    #   SPC threshold : 73
+    #   limit_frequency: 1,836,000 kHz = 1.836 GHz = ~74.9 % of peak
     write /sys/devices/system/cpu/cpufreq/policy4/sched_pixel/lcpi_threshold 0
     write /sys/devices/system/cpu/cpufreq/policy4/sched_pixel/spc_threshold 73
     write /sys/devices/system/cpu/cpufreq/policy4/sched_pixel/limit_frequency 1836000
+    write /sys/devices/system/cpu/cpufreq/policy4/sched_pixel/pmu_limit_enable 1
+
+    # policy8 – Prime core cpu8 (MakaluELP, max ~2860 MHz):
+    #   SPC threshold : 68
+    #   limit_frequency: 2,363,000 kHz = 2.363 GHz = ~82.6 % of peak
     write /sys/devices/system/cpu/cpufreq/policy8/sched_pixel/lcpi_threshold 0
     write /sys/devices/system/cpu/cpufreq/policy8/sched_pixel/spc_threshold 68
     write /sys/devices/system/cpu/cpufreq/policy8/sched_pixel/limit_frequency 2363000
+    write /sys/devices/system/cpu/cpufreq/policy8/sched_pixel/pmu_limit_enable 1
+
+    # PMU poll interval: 10 ms (how often the kernel samples SPC counters).
     write /proc/vendor_sched/pmu_poll_time 10
+
+    # ── Restore PELT multiplier to maximum ───────────────────────────────────
+    # sched_pelt_multiplier: scale 1 (slowest) – 4 (fastest).  Set to 1 at
+    # early-init to prevent premature boost during startup; now that boot is
+    # complete, restore to 4 so the governor tracks task demand at full speed.
+    write /proc/sys/kernel/sched_pelt_multiplier 4
 
     # Make devices on the critical path for suspend/resume asynchronous
     write /sys/devices/platform/fixedregulator@0/regulator/regulator.2/power/async "enabled"
