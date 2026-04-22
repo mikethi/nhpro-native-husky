@@ -30,7 +30,7 @@ This kernel enables all of the above interfaces on the zuma SoC without any HAL 
 ### Bare metal (Kali or Debian)
 
 ```bash
-sudo apt install git debos bmap-tools xz-utils mkbootimg fastboot
+sudo apt install git debos xz-utils mkbootimg fastboot
 ```
 
 ### Docker
@@ -71,6 +71,50 @@ sudo apt install git docker.io kali-archive-keyring
 | `-v` | | Verbose |
 | `-D` | | Debug shell on failure |
 
+---
+
+## kali-build.sh
+
+Validated build wrapper for Kali Linux (WSL or bare-metal). Automatically installs
+missing packages, starts Docker, runs the build, and prints flash commands when done.
+
+```bash
+cd ~/nhpro-native-husky/nethunter-pro
+./kali-build.sh [OPTIONS]
+```
+
+All options are forwarded to `build.sh -d` (Docker is always used):
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-e ENV` | `phosh` | Desktop environment (`phosh` \| `plasma-mobile`) |
+| `-c` | | Encrypt root filesystem |
+| `-R PWD` | | Encryption password |
+| `-H NAME` | `kali` | Hostname |
+| `-u USER` | `kali` | Username |
+| `-p PWD` | `1234` | User password |
+| `-s` | | Enable SSH |
+| `-Z` | | Enable ZRAM |
+| `-z` | | Compress output image |
+| `-V VER` | `YYYYMMDD` | Version string |
+| `-M URL` | kali mirror | APT mirror |
+| `-v` | | Verbose |
+| `-D` | | Debug shell on failure |
+
+```bash
+# Default build
+./kali-build.sh
+
+# Plasma Mobile, SSH on, compressed output
+./kali-build.sh -e plasma-mobile -s -z
+
+# Custom credentials
+./kali-build.sh -H pixel8pro -u hunter -p s3cr3t
+
+# Encrypted rootfs
+./kali-build.sh -c -R myEncryptionPassphrase
+```
+
 ## Flash
 
 > **⚠ Unlocking the bootloader wipes all data on the device.**
@@ -99,7 +143,7 @@ Default credentials: **kali / 1234**
 | SoC | Google Tensor G3 (zuma / Exynos GS301) |
 | RAM | 12 GiB LPDDR5X |
 | Display | 6.7″ LTPO OLED 1344×2992 120 Hz |
-| Boot image | Android header v4, pagesize 2048 |
+| Boot image | Android header v4, pagesize 4096 |
 | Kernel cmdline | `earlycon=exynos4210,mmio32,0x10870000 console=ttySAC0,115200n8 clk_ignore_unused swiotlb=noforce androidboot.hardware=zuma` |
 | Flash method | `fastboot` |
 

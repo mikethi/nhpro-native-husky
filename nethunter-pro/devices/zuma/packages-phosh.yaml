@@ -43,3 +43,35 @@ actions:
     description: Enable greetd display manager
     chroot: true
     command: systemctl enable greetd.service
+
+  # ── System monitor and perf/radio toggle tools ───────────────────────────
+  # btop   – terminal resource monitor (CPU/RAM/proc), launched from kgx.
+  # conky  – terminal widget: live sched/freq/thermal/radio readings.
+  # python3-gi – GTK3 Python bindings for nhpro-system-manager GUI.
+  # rfkill – kernel-level radio block/unblock (WiFi, BT, cell/wwan).
+  #          rfkill is part of util-linux and is already present on Kali;
+  #          listed explicitly so the dep is declared and auditable.
+  # No conflicts with existing packages:
+  #   btop / conky read /proc and /sys only.
+  #   python3-gi is a pure binding layer; no overlap with PipeWire/BlueZ/Phosh.
+  #   rfkill is a kernel utility; it does not replace wpasupplicant, iwd,
+  #   bluez, or modemmanager – it simply gates their hardware access.
+  - action: apt
+    recommends: false
+    description: Install system monitor and toggle dependencies
+    packages:
+      - btop
+      - conky-all
+      - python3-gi
+      - rfkill
+
+  # ── Mark toggle scripts executable and enable boot service ───────────────
+  - action: run
+    description: Set toggle scripts executable
+    chroot: true
+    command: chmod +x /usr/local/bin/nhpro-perf-toggle /usr/local/bin/nhpro-radio-toggle /usr/local/bin/nhpro-system-manager
+
+  - action: run
+    description: Enable NHPro CPU perf-mode restore service
+    chroot: true
+    command: systemctl enable nhpro-perf-mode.service
