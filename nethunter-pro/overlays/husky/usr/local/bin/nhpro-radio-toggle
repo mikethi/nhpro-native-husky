@@ -1,9 +1,16 @@
 #!/bin/sh
 # nhpro-radio-toggle – per-radio and all-radio kill-switch for NHPro/husky
 #
-# Each radio (wifi, bluetooth, cell) is controlled independently via rfkill.
-# Cellular is additionally managed through ModemManager (mmcli) so the modem
-# stack is cleanly shut down, not just radio-blocked.
+# Turning a radio OFF performs a full stack teardown in order:
+#   1. Disconnect / stop the userspace service (NetworkManager, bluetoothd,
+#      ModemManager) so no daemon is left holding the device open.
+#   2. Bring the kernel network interface down (wifi).
+#   3. rfkill soft-block the hardware so the transceiver stops emitting.
+#
+# Turning a radio ON reverses the sequence:
+#   1. rfkill unblock (restores hardware power).
+#   2. Bring the interface up / start the daemon.
+#   3. Let the stack reconnect automatically.
 #
 # Usage:
 #   nhpro-radio-toggle wifi      on|off
@@ -23,23 +30,106 @@ rfkill_unblock() { rfkill unblock "$1" 2>/dev/null || true; }
 # rfkill type for cellular is 'wwan'
 cell_rfkill_type=wwan
 
-modem_disable() {
-    if command -v mmcli >/dev/null 2>&1; then
-        modem_id=$(mmcli -L 2>/dev/null | grep -oE '/org/freedesktop/ModemManager[0-9]*/Modem/[0-9]+' | head -1)
-        if [ -n "$modem_id" ]; then
-            mmcli --modem="$modem_id" --disable 2>/dev/null || true
-        fi
+# Bring a network interface down/up if it exists
+iface_down() {
+    iface="$1"
+    if ip link show "$iface" >/dev/null 2>&1; then
+        ip link set "$iface" down 2>/dev/null || true
     fi
 }
 
-modem_enable() {
+iface_up() {
+    iface="$1"
+    if ip link show "$iface" >/dev/null 2>&1; then
+        ip link set "$iface" up 2>/dev/null || true
+    fi
+}
+
+# Discover the first wireless interface name (usually wlan0)
+wifi_iface() {
+    for iface in /sys/class/net/wlan* /sys/class/net/wlp*; do
+        [ -e "$iface" ] || continue
+        basename "$iface"
+        return
+    done
+    echo "wlan0"  # fallback
+}
+
+# ── WiFi teardown / bring-up ──────────────────────────────────────────────────
+
+wifi_off() {
+    iface=$(wifi_iface)
+    # 1. Tell NetworkManager to drop the connection (if nmcli is present)
+    if command -v nmcli >/dev/null 2>&1; then
+        nmcli radio wifi off 2>/dev/null || true
+    fi
+    # 2. Bring the kernel interface down so no traffic can leak
+    iface_down "$iface"
+    # 3. rfkill soft-block the transceiver
+    rfkill_block wifi
+}
+
+wifi_on() {
+    iface=$(wifi_iface)
+    # 1. rfkill unblock so the hardware is powered
+    rfkill_unblock wifi
+    # 2. Bring the kernel interface back up
+    iface_up "$iface"
+    # 3. Tell NetworkManager to resume (auto-reconnects to saved networks)
+    if command -v nmcli >/dev/null 2>&1; then
+        nmcli radio wifi on 2>/dev/null || true
+    fi
+}
+
+# ── Bluetooth teardown / bring-up ─────────────────────────────────────────────
+
+bt_off() {
+    # 1. Stop bluetoothd – this cleanly disconnects all paired devices and
+    #    removes the HCI interface before we cut the hardware.
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl stop bluetooth.service 2>/dev/null || true
+    fi
+    # 2. rfkill soft-block
+    rfkill_block bluetooth
+}
+
+bt_on() {
+    # 1. rfkill unblock first so the HCI device appears when bluetoothd starts
+    rfkill_unblock bluetooth
+    # 2. Start bluetoothd
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl start bluetooth.service 2>/dev/null || true
+    fi
+}
+
+# ── Cell (wwan / ModemManager) teardown / bring-up ───────────────────────────
+
+modem_id() {
     if command -v mmcli >/dev/null 2>&1; then
-        # unblock rfkill first so ModemManager can see the device
-        rfkill_unblock "$cell_rfkill_type"
-        modem_id=$(mmcli -L 2>/dev/null | grep -oE '/org/freedesktop/ModemManager[0-9]*/Modem/[0-9]+' | head -1)
-        if [ -n "$modem_id" ]; then
-            mmcli --modem="$modem_id" --enable 2>/dev/null || true
-        fi
+        mmcli -L 2>/dev/null \
+            | grep -oE '/org/freedesktop/ModemManager[0-9]*/Modem/[0-9]+' \
+            | head -1
+    fi
+}
+
+cell_off() {
+    # 1. Tell ModemManager to disable the modem (drops data bearer, deregisters
+    #    from network) before we cut the rfkill line.
+    mid=$(modem_id)
+    if [ -n "$mid" ]; then
+        mmcli --modem="$mid" --disable 2>/dev/null || true
+    fi
+    # 2. rfkill soft-block the wwan transceiver
+    rfkill_block "$cell_rfkill_type"
+}
+
+cell_on() {
+    # 1. rfkill unblock so the modem hardware is powered and visible to MM
+    rfkill_unblock "$cell_rfkill_type"
+    # 2. Enable the modem through ModemManager (re-registers on network)
+    mid=$(modem_id)
+    if [ -n "$mid" ]; then
+        mmcli --modem="$mid" --enable 2>/dev/null || true
     fi
 }
 
@@ -48,13 +138,12 @@ modem_enable() {
 print_status() {
     for type in wifi bluetooth "$cell_rfkill_type"; do
         blocked="unblocked"
-        # Read soft-block state from sysfs – no root needed
         for dev in /sys/class/rfkill/rfkill*; do
             [ -f "$dev/type" ] || continue
             dev_type=$(cat "$dev/type")
             [ "$dev_type" = "$type" ] || continue
             soft=$(cat "$dev/soft" 2>/dev/null || echo 0)
-            if [ "$soft" = "1" ]; then blocked="blocked (off)"; fi
+            [ "$soft" = "1" ] && blocked="blocked (off)"
         done
         label="$type"
         [ "$type" = "$cell_rfkill_type" ] && label="cell (wwan)"
@@ -70,39 +159,37 @@ state="${2:-}"
 case "$radio" in
     wifi)
         case "$state" in
-            on)  rfkill_unblock wifi
-                 printf 'nhpro-radio-toggle: WiFi on\n' ;;
-            off) rfkill_block wifi
-                 printf 'nhpro-radio-toggle: WiFi off\n' ;;
+            on)  wifi_on;  printf 'nhpro-radio-toggle: WiFi on\n' ;;
+            off) wifi_off; printf 'nhpro-radio-toggle: WiFi off\n' ;;
             *)   printf 'Usage: nhpro-radio-toggle wifi {on|off}\n' >&2; exit 1 ;;
         esac
         ;;
     bluetooth|bt)
         case "$state" in
-            on)  rfkill_unblock bluetooth
-                 printf 'nhpro-radio-toggle: Bluetooth on\n' ;;
-            off) rfkill_block bluetooth
-                 printf 'nhpro-radio-toggle: Bluetooth off\n' ;;
+            on)  bt_on;  printf 'nhpro-radio-toggle: Bluetooth on\n' ;;
+            off) bt_off; printf 'nhpro-radio-toggle: Bluetooth off\n' ;;
             *)   printf 'Usage: nhpro-radio-toggle bluetooth {on|off}\n' >&2; exit 1 ;;
         esac
         ;;
     cell|wwan)
         case "$state" in
-            on)  modem_enable
-                 printf 'nhpro-radio-toggle: Cell on\n' ;;
-            off) modem_disable
-                 rfkill_block "$cell_rfkill_type"
-                 printf 'nhpro-radio-toggle: Cell off\n' ;;
+            on)  cell_on;  printf 'nhpro-radio-toggle: Cell on\n' ;;
+            off) cell_off; printf 'nhpro-radio-toggle: Cell off\n' ;;
             *)   printf 'Usage: nhpro-radio-toggle cell {on|off}\n' >&2; exit 1 ;;
         esac
         ;;
     all)
         case "$state" in
-            off) rfkill_block all
-                 modem_disable
+            off) # Ordered teardown: services first, then rfkill last
+                 wifi_off
+                 bt_off
+                 cell_off
                  printf 'nhpro-radio-toggle: all radios off\n' ;;
-            on)  modem_enable
-                 rfkill_unblock all
+            on)  # Ordered bring-up: rfkill unblock first (inside each *_on),
+                 # then services
+                 cell_on
+                 bt_on
+                 wifi_on
                  printf 'nhpro-radio-toggle: all radios on\n' ;;
             *)   printf 'Usage: nhpro-radio-toggle all {on|off}\n' >&2; exit 1 ;;
         esac
