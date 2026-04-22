@@ -15,13 +15,13 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Build bundle zip
         run: python3 scripts/create_repo_bundle_zip.py
 
       - name: Upload bundle artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: repo-and-links
           path: dist/repo-and-links.zip
