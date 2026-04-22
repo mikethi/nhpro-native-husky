@@ -1,0 +1,103 @@
+#!/bin/sh
+# boot-selector: PID-1 init for the selector prepend-initrd
+# Google Pixel 8 Pro (husky / zuma SoC)
+#
+# This script runs as the very first process after the kernel loads the
+# selector initrd.  It reads a boot target, dispatches to the matching
+# handler in /boot-targets/, then either:
+#
+#   linux    – extracts the embedded real initrd over the current tmpfs
+#              and execs its /init (NetHunter Pro default)
+#   android  – kexecs to the Android kernel stored on userdata
+#   recovery – kexecs to the Android recovery kernel stored on userdata
+#   <custom> – any /boot-targets/<name>.sh you add is picked up automatically
+#
+# Boot target priority (first non-empty wins):
+#   1. Kernel cmdline parameter:  boot_target=<name>
+#   2. Flag file on userdata:     /userdata/.boot_target  (one line, plain text)
+#   3. Built-in default:          linux
+#
+# Hardware notes (husky):
+#   Console : ttySAC0 @ 0x10870000, 115200n8  (Exynos UART0)
+#   Storage : UFS 3.1 via exynos-ufs → /dev/sda  (GPT, userdata label "userdata")
+#   Boot    : Android header v4, A/B scheme, no SD card
+
+set -e
+
+CONSOLE=/dev/console
+
+# ── mount kernel filesystems ────────────────────────────────────────────────
+mount -t proc     proc     /proc
+mount -t sysfs    sysfs    /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || {
+    mount -t tmpfs tmpfs /dev
+    # Minimal static device nodes for UFS + console before udev
+    mknod -m 600 /dev/console  c 5 1 2>/dev/null || true
+    mknod -m 666 /dev/null     c 1 3 2>/dev/null || true
+    mknod -m 660 /dev/sda      b 8 0 2>/dev/null || true
+    # sda1-sda30 covers the full husky GPT layout
+    i=1; while [ $i -le 30 ]; do
+        mknod -m 660 "/dev/sda${i}" b 8 "$i" 2>/dev/null || true
+        i=$((i + 1))
+    done
+}
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts 2>/dev/null || true
+
+exec 0<$CONSOLE 1>$CONSOLE 2>$CONSOLE
+
+echo "boot-selector: starting" >$CONSOLE
+
+# ── read boot target ─────────────────────────────────────────────────────────
+BOOT_TARGET=""
+
+# Priority 1: kernel cmdline  (fastboot boot -c "boot_target=android" ...)
+for arg in $(cat /proc/cmdline); do
+    case "$arg" in
+        boot_target=*) BOOT_TARGET="${arg#boot_target=}" ;;
+    esac
+done
+
+# Priority 2: flag file on userdata  (/userdata/.boot_target)
+if [ -z "$BOOT_TARGET" ]; then
+    USERDATA_DEV=""
+    # Scan GPT partitions for the "userdata" label.
+    # On husky the UFS block device is /dev/sda; the userdata partition is
+    # typically /dev/sda15 or nearby but the label is the stable identifier.
+    for dev in /dev/sda* /dev/nvme0n1p* /dev/mmcblk0p*; do
+        [ -b "$dev" ] || continue
+        label="$(blkid -o value -s PARTLABEL "$dev" 2>/dev/null)" || continue
+        if [ "$label" = "userdata" ]; then
+            USERDATA_DEV="$dev"
+            break
+        fi
+    done
+
+    if [ -n "$USERDATA_DEV" ]; then
+        mkdir -p /run/boot-selector/mnt
+        if mount -t ext4 -o ro "$USERDATA_DEV" /run/boot-selector/mnt 2>/dev/null; then
+            if [ -f /run/boot-selector/mnt/.boot_target ]; then
+                BOOT_TARGET="$(tr -d '[:space:]' < /run/boot-selector/mnt/.boot_target)"
+                echo "boot-selector: flag file on ${USERDATA_DEV} → '${BOOT_TARGET}'" >$CONSOLE
+            fi
+            umount /run/boot-selector/mnt 2>/dev/null || true
+        fi
+    fi
+fi
+
+# Priority 3: default
+BOOT_TARGET="${BOOT_TARGET:-linux}"
+
+echo "boot-selector: target = ${BOOT_TARGET}" >$CONSOLE
+
+# ── dispatch ─────────────────────────────────────────────────────────────────
+TARGET_SCRIPT="/boot-targets/${BOOT_TARGET}.sh"
+
+if [ ! -f "$TARGET_SCRIPT" ]; then
+    echo "boot-selector: unknown target '${BOOT_TARGET}' – falling back to linux" >$CONSOLE
+    TARGET_SCRIPT="/boot-targets/linux.sh"
+fi
+
+# shellcheck disable=SC1090
+. "$TARGET_SCRIPT"
+run_target
