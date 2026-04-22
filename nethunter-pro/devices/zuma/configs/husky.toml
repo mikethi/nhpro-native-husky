@@ -31,3 +31,57 @@ boot_part  = "boot"
 # The full system image goes to the userdata partition (or a dedicated
 # system partition if available).  Adjust as needed for your flash layout.
 root_part  = "userdata"
+
+# ── Flash targets ─────────────────────────────────────────────────────────────
+# Each [[flash.targets]] entry describes one `fastboot flash` command.
+#
+# Fields:
+#   partition  – fastboot partition name (required)
+#   image      – path/filename of the image file to flash (required)
+#                Supports the ${image} variable which expands to the build
+#                image basename set by build.sh (e.g. nethunterpro-YYYYMMDD-husky-phosh).
+#   optional   – if true, skip this target silently when the image file is not
+#                found instead of aborting (default: false)
+#   slot       – A/B slot to target: "a", "b", or "all"
+#                Omit (or leave empty) to use the device's current active slot.
+#
+# Targets are flashed in the order they appear here.
+
+[[flash.targets]]
+partition = "boot"
+image     = "${image}-boot.img"
+optional  = false
+
+[[flash.targets]]
+partition = "userdata"
+image     = "${image}.img"
+optional  = false
+
+# ── Full factory-image reset (commented out) ──────────────────────────────────
+# Uncomment and adjust paths after extracting a Pixel factory ZIP to flash every
+# partition required for a clean baseline before installing NetHunter Pro.
+#
+# [[flash.targets]]
+# partition = "bootloader"
+# image     = "factory/bootloader-husky-<version>.img"
+# optional  = false
+#
+# [[flash.targets]]
+# partition = "radio"
+# image     = "factory/radio-husky-<version>.img"
+# optional  = false
+#
+# [[flash.targets]]
+# partition = "vendor"
+# image     = "factory/vendor.img"
+# optional  = true
+#
+# [[flash.targets]]
+# partition = "system"
+# image     = "factory/system.img"
+# optional  = true
+#
+# [[flash.targets]]
+# partition = "userdata"
+# image     = "factory/userdata.img"
+# optional  = false
