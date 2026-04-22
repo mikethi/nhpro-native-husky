@@ -1,0 +1,478 @@
+#!/usr/bin/env python3
+# nhpro-system-manager – NHPro live system monitor and settings panel
+#
+# Sections
+#   CPU          – live per-cluster frequency + PELT multiplier + CPU load
+#   CPU Settings – GtkSwitch: Uncapped / Stock performance mode
+#   Memory       – RAM and swap usage bars
+#   Radios       – individual GtkSwitch per radio (WiFi / Bluetooth / Cell)
+#                  plus a "Kill All Radios" toggle switch
+#
+# All toggle switches take effect immediately (live sysfs writes) and persist
+# across reboots via /etc/nhpro/perf-mode (CPU) and rfkill soft-block state
+# (radios).  Root access is granted passwordlessly through
+# /etc/sudoers.d/nhpro-perf-toggle.
+
+import gi
+gi.require_version('Gtk', '3.0')
+from gi.repository import Gtk, GLib
+
+import os
+import subprocess
+import glob
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _read(path, default='?'):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return default
+
+
+def _run(cmd):
+    """Run a command list; returns (returncode, stdout, stderr)."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        return r.returncode, r.stdout.strip(), r.stderr.strip()
+    except Exception as e:
+        return 1, '', str(e)
+
+
+def _sudo(*args):
+    return _run(['sudo'] + list(args))
+
+
+# ── sysfs readers ─────────────────────────────────────────────────────────────
+
+def cpu_freq_mhz(policy):
+    """Current frequency in MHz for a cpufreq policy."""
+    raw = _read(
+        f'/sys/devices/system/cpu/cpufreq/policy{policy}/scaling_cur_freq',
+        '0',
+    )
+    try:
+        return int(raw) // 1000
+    except ValueError:
+        return 0
+
+
+def cpu_usage_percent():
+    """Snapshot /proc/stat → return list of per-cpu usage % (0–100)."""
+    try:
+        with open('/proc/stat') as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+    cpus = []
+    for line in lines:
+        if not line.startswith('cpu') or line.startswith('cpu '):
+            continue
+        parts = line.split()
+        vals = [int(x) for x in parts[1:]]
+        idle  = vals[3] + (vals[4] if len(vals) > 4 else 0)
+        total = sum(vals)
+        cpus.append((total, idle))
+    return cpus
+
+
+def mem_info():
+    """Return dict of key meminfo values in kB."""
+    info = {}
+    try:
+        with open('/proc/meminfo') as f:
+            for line in f:
+                k, v = line.split(':', 1)
+                info[k.strip()] = int(v.split()[0])
+    except OSError:
+        pass
+    return info
+
+
+def rfkill_soft_blocked(rfkill_type):
+    """Return True if any rfkill device of that type is soft-blocked."""
+    for dev in sorted(glob.glob('/sys/class/rfkill/rfkill*')):
+        t = _read(os.path.join(dev, 'type'), '')
+        if t == rfkill_type:
+            return _read(os.path.join(dev, 'soft'), '0') == '1'
+    return False  # no device found → treat as not blocked
+
+
+def perf_mode():
+    return _read('/etc/nhpro/perf-mode', 'uncapped')
+
+
+# ── main window ───────────────────────────────────────────────────────────────
+
+class NHProSystemManager(Gtk.Window):
+
+    def __init__(self):
+        super().__init__(title='NHPro System Manager')
+        self.set_border_width(12)
+        self.set_default_size(360, 0)
+        self.connect('destroy', Gtk.main_quit)
+
+        # State for CPU usage delta calculation
+        self._prev_cpu = cpu_usage_percent()
+
+        # Suppress re-entrancy while we programmatically update switches
+        self._updating = False
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.add(outer)
+
+        outer.pack_start(self._build_cpu_section(),      False, True, 0)
+        outer.pack_start(self._build_cpu_settings(),     False, True, 0)
+        outer.pack_start(self._build_memory_section(),   False, True, 0)
+        outer.pack_start(self._build_radio_section(),    False, True, 0)
+
+        self.show_all()
+
+        # Live refresh every 2 s
+        GLib.timeout_add_seconds(2, self._refresh)
+
+    # ── section builders ──────────────────────────────────────────────────────
+
+    def _section_frame(self, title):
+        frame = Gtk.Frame(label=f'<b>{title}</b>')
+        frame.get_label_widget().set_use_markup(True)
+        frame.set_shadow_type(Gtk.ShadowType.NONE)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.set_margin_top(6)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        box.set_margin_bottom(6)
+        frame.add(box)
+        return frame, box
+
+    def _label_row(self, label_text, value_text=''):
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        lbl = Gtk.Label(label=label_text, xalign=0)
+        lbl.set_hexpand(True)
+        val = Gtk.Label(label=value_text, xalign=1)
+        val.set_halign(Gtk.Align.END)
+        row.pack_start(lbl, True, True, 0)
+        row.pack_start(val, False, False, 0)
+        return row, val
+
+    def _switch_row(self, label_text, active=False, on_toggled=None):
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        lbl = Gtk.Label(label=label_text, xalign=0)
+        lbl.set_hexpand(True)
+        sw = Gtk.Switch()
+        sw.set_active(active)
+        sw.set_valign(Gtk.Align.CENTER)
+        if on_toggled:
+            sw.connect('notify::active', on_toggled)
+        row.pack_start(lbl, True, True, 0)
+        row.pack_start(sw, False, False, 0)
+        return row, sw
+
+    # ── CPU section ───────────────────────────────────────────────────────────
+
+    def _build_cpu_section(self):
+        frame, box = self._section_frame('CPU')
+
+        _, self._lbl_freq0  = self._label_row('Little cores (0–3)')
+        _, self._lbl_freq4  = self._label_row('Mid cores (4–7)')
+        _, self._lbl_freq8  = self._label_row('Prime core (8)')
+        _, self._lbl_pelt   = self._label_row('PELT multiplier')
+        _, self._lbl_load   = self._label_row('Core load')
+
+        for row, _ in [
+            self._label_row('Little cores (0–3)'),
+            self._label_row('Mid cores (4–7)'),
+            self._label_row('Prime core (8)'),
+            self._label_row('PELT multiplier'),
+            self._label_row('Core load'),
+        ]:
+            box.pack_start(row, False, True, 0)
+
+        # Re-build properly so we keep refs to value labels
+        for child in box.get_children():
+            box.remove(child)
+
+        r0, self._lbl_freq0 = self._label_row('Little cores (0–3)', '— MHz')
+        r4, self._lbl_freq4 = self._label_row('Mid cores (4–7)',    '— MHz')
+        r8, self._lbl_freq8 = self._label_row('Prime core (8)',     '— MHz')
+        rp, self._lbl_pelt  = self._label_row('PELT multiplier',    '—')
+        rl, self._lbl_load  = self._label_row('Core load',          '—')
+
+        for row in (r0, r4, r8, rp, rl):
+            box.pack_start(row, False, True, 0)
+
+        self._update_cpu_labels()
+        return frame
+
+    def _update_cpu_labels(self):
+        self._lbl_freq0.set_text(f'{cpu_freq_mhz(0)} MHz')
+        self._lbl_freq4.set_text(f'{cpu_freq_mhz(4)} MHz')
+        self._lbl_freq8.set_text(f'{cpu_freq_mhz(8)} MHz')
+        self._lbl_pelt.set_text(
+            _read('/proc/sys/kernel/sched_pelt_multiplier', '?'))
+
+        curr = cpu_usage_percent()
+        if self._prev_cpu and len(curr) == len(self._prev_cpu):
+            pcts = []
+            for (ct, ci), (pt, pi) in zip(curr, self._prev_cpu):
+                dt = ct - pt
+                di = ci - pi
+                pcts.append(0 if dt == 0 else int(100 * (dt - di) / dt))
+            self._prev_cpu = curr
+            # Group into clusters
+            little = pcts[1:5] if len(pcts) >= 5 else pcts[1:]
+            mid    = pcts[5:9] if len(pcts) >= 9 else []
+            prime  = [pcts[9]] if len(pcts) >= 10 else []
+            parts  = []
+            if little:
+                parts.append('L:' + '/'.join(f'{p}%' for p in little))
+            if mid:
+                parts.append('M:' + '/'.join(f'{p}%' for p in mid))
+            if prime:
+                parts.append(f'P:{prime[0]}%')
+            self._lbl_load.set_text('  '.join(parts) if parts else '—')
+        else:
+            self._prev_cpu = curr
+
+    # ── CPU Settings section ──────────────────────────────────────────────────
+
+    def _build_cpu_settings(self):
+        frame, box = self._section_frame('CPU Settings')
+
+        active = (perf_mode() == 'uncapped')
+        row, self._sw_perf = self._switch_row(
+            'Performance mode  (● Uncapped  ○ Stock)',
+            active=active,
+            on_toggled=self._on_perf_toggled,
+        )
+        box.pack_start(row, False, True, 0)
+
+        self._lbl_perf_hint = Gtk.Label(xalign=0)
+        self._lbl_perf_hint.set_markup(
+            '<small><i>Uncapped: full CPU headroom for pentest workloads\n'
+            'Stock: OEM conservative scheduler policy</i></small>'
+        )
+        box.pack_start(self._lbl_perf_hint, False, True, 0)
+
+        return frame
+
+    def _on_perf_toggled(self, sw, _param):
+        if self._updating:
+            return
+        mode = 'uncapped' if sw.get_active() else 'stock'
+        rc, _, err = _sudo('nhpro-perf-toggle', mode)
+        if rc != 0:
+            self._show_error(f'perf-toggle failed:\n{err}')
+            # Revert switch
+            self._updating = True
+            sw.set_active(not sw.get_active())
+            self._updating = False
+
+    # ── Memory section ────────────────────────────────────────────────────────
+
+    def _build_memory_section(self):
+        frame, box = self._section_frame('Memory')
+
+        _, self._lbl_ram  = self._label_row('RAM', '—')
+        _, self._lbl_swap = self._label_row('Swap', '—')
+
+        rr, self._lbl_ram  = self._label_row('RAM',  '—')
+        rs, self._lbl_swap = self._label_row('Swap', '—')
+
+        self._bar_ram  = Gtk.ProgressBar()
+        self._bar_swap = Gtk.ProgressBar()
+
+        box.pack_start(rr,             False, True, 0)
+        box.pack_start(self._bar_ram,  False, True, 0)
+        box.pack_start(rs,             False, True, 0)
+        box.pack_start(self._bar_swap, False, True, 0)
+
+        self._update_memory_labels()
+        return frame
+
+    def _update_memory_labels(self):
+        m = mem_info()
+        total = m.get('MemTotal', 0)
+        avail = m.get('MemAvailable', 0)
+        used  = total - avail
+        stot  = m.get('SwapTotal', 0)
+        sused = stot - m.get('SwapFree', 0)
+
+        def fmt_mb(kb):
+            return f'{kb / 1024:.0f} MB' if kb < 1024 * 1024 \
+                else f'{kb / 1048576:.1f} GB'
+
+        if total > 0:
+            self._lbl_ram.set_text(f'{fmt_mb(used)} / {fmt_mb(total)}')
+            self._bar_ram.set_fraction(used / total)
+            self._bar_ram.set_text(f'{100 * used // total}%')
+            self._bar_ram.set_show_text(True)
+
+        if stot > 0:
+            self._lbl_swap.set_text(f'{fmt_mb(sused)} / {fmt_mb(stot)}')
+            self._bar_swap.set_fraction(sused / stot)
+            self._bar_swap.set_text(f'{100 * sused // stot}%')
+            self._bar_swap.set_show_text(True)
+        else:
+            self._lbl_swap.set_text('not enabled')
+            self._bar_swap.set_fraction(0)
+
+    # ── Radios section ────────────────────────────────────────────────────────
+
+    def _build_radio_section(self):
+        frame, box = self._section_frame('Radios')
+
+        rw, self._sw_wifi = self._switch_row(
+            'WiFi',
+            active=not rfkill_soft_blocked('wifi'),
+            on_toggled=self._on_wifi_toggled,
+        )
+        rb, self._sw_bt = self._switch_row(
+            'Bluetooth',
+            active=not rfkill_soft_blocked('bluetooth'),
+            on_toggled=self._on_bt_toggled,
+        )
+        rc, self._sw_cell = self._switch_row(
+            'Cell (mobile data)',
+            active=not rfkill_soft_blocked('wwan'),
+            on_toggled=self._on_cell_toggled,
+        )
+
+        # Kill-all switch: ON = all radios on, OFF = all radios off
+        all_on = (
+            not rfkill_soft_blocked('wifi') and
+            not rfkill_soft_blocked('bluetooth') and
+            not rfkill_soft_blocked('wwan')
+        )
+        rka, self._sw_kill_all = self._switch_row(
+            'All radios',
+            active=all_on,
+            on_toggled=self._on_kill_all_toggled,
+        )
+
+        sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+
+        for row in (rw, rb, rc, sep, rka):
+            box.pack_start(row, False, True, 0)
+
+        hint = Gtk.Label(xalign=0)
+        hint.set_markup(
+            '<small><i>"All radios" off = hardware kill-switch for WiFi, '
+            'Bluetooth and cell simultaneously</i></small>'
+        )
+        box.pack_start(hint, False, True, 0)
+
+        return frame
+
+    def _on_wifi_toggled(self, sw, _param):
+        if self._updating:
+            return
+        state = 'on' if sw.get_active() else 'off'
+        rc, _, err = _sudo('nhpro-radio-toggle', 'wifi', state)
+        if rc != 0:
+            self._show_error(f'radio-toggle wifi failed:\n{err}')
+            self._updating = True
+            sw.set_active(not sw.get_active())
+            self._updating = False
+        else:
+            self._sync_kill_all_switch()
+
+    def _on_bt_toggled(self, sw, _param):
+        if self._updating:
+            return
+        state = 'on' if sw.get_active() else 'off'
+        rc, _, err = _sudo('nhpro-radio-toggle', 'bluetooth', state)
+        if rc != 0:
+            self._show_error(f'radio-toggle bluetooth failed:\n{err}')
+            self._updating = True
+            sw.set_active(not sw.get_active())
+            self._updating = False
+        else:
+            self._sync_kill_all_switch()
+
+    def _on_cell_toggled(self, sw, _param):
+        if self._updating:
+            return
+        state = 'on' if sw.get_active() else 'off'
+        rc, _, err = _sudo('nhpro-radio-toggle', 'cell', state)
+        if rc != 0:
+            self._show_error(f'radio-toggle cell failed:\n{err}')
+            self._updating = True
+            sw.set_active(not sw.get_active())
+            self._updating = False
+        else:
+            self._sync_kill_all_switch()
+
+    def _on_kill_all_toggled(self, sw, _param):
+        if self._updating:
+            return
+        state = 'on' if sw.get_active() else 'off'
+        rc, _, err = _sudo('nhpro-radio-toggle', 'all', state)
+        if rc != 0:
+            self._show_error(f'radio-toggle all failed:\n{err}')
+            self._updating = True
+            sw.set_active(not sw.get_active())
+            self._updating = False
+        else:
+            # Sync the individual radio switches to match
+            self._updating = True
+            active = sw.get_active()
+            self._sw_wifi.set_active(active)
+            self._sw_bt.set_active(active)
+            self._sw_cell.set_active(active)
+            self._updating = False
+
+    def _sync_kill_all_switch(self):
+        """Set the kill-all switch to ON only when every radio is unblocked."""
+        all_on = (
+            self._sw_wifi.get_active() and
+            self._sw_bt.get_active() and
+            self._sw_cell.get_active()
+        )
+        self._updating = True
+        self._sw_kill_all.set_active(all_on)
+        self._updating = False
+
+    # ── live refresh ──────────────────────────────────────────────────────────
+
+    def _refresh(self):
+        self._update_cpu_labels()
+        self._update_memory_labels()
+
+        # Sync radio switches to current sysfs state (external changes)
+        self._updating = True
+        self._sw_wifi.set_active(not rfkill_soft_blocked('wifi'))
+        self._sw_bt.set_active(not rfkill_soft_blocked('bluetooth'))
+        self._sw_cell.set_active(not rfkill_soft_blocked('wwan'))
+        self._sync_kill_all_switch()
+        self._updating = False
+
+        # Sync CPU perf switch
+        current_mode = perf_mode()
+        self._updating = True
+        self._sw_perf.set_active(current_mode == 'uncapped')
+        self._updating = False
+
+        return True  # keep timer running
+
+    # ── error dialog ──────────────────────────────────────────────────────────
+
+    def _show_error(self, msg):
+        dlg = Gtk.MessageDialog(
+            transient_for=self,
+            modal=True,
+            message_type=Gtk.MessageType.ERROR,
+            buttons=Gtk.ButtonsType.OK,
+            text='NHPro System Manager',
+        )
+        dlg.format_secondary_text(msg)
+        dlg.run()
+        dlg.destroy()
+
+
+# ── entry point ───────────────────────────────────────────────────────────────
+
+if __name__ == '__main__':
+    win = NHProSystemManager()
+    Gtk.main()

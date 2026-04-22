@@ -1,0 +1,118 @@
+#!/bin/sh
+# nhpro-radio-toggle – per-radio and all-radio kill-switch for NHPro/husky
+#
+# Each radio (wifi, bluetooth, cell) is controlled independently via rfkill.
+# Cellular is additionally managed through ModemManager (mmcli) so the modem
+# stack is cleanly shut down, not just radio-blocked.
+#
+# Usage:
+#   nhpro-radio-toggle wifi      on|off
+#   nhpro-radio-toggle bluetooth on|off
+#   nhpro-radio-toggle cell      on|off
+#   nhpro-radio-toggle all       off        # kill-switch: all radios off
+#   nhpro-radio-toggle all       on         # restore all radios
+#   nhpro-radio-toggle status               # print current soft-block state
+
+set -e
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+rfkill_block()   { rfkill block   "$1" 2>/dev/null || true; }
+rfkill_unblock() { rfkill unblock "$1" 2>/dev/null || true; }
+
+# rfkill type for cellular is 'wwan'
+cell_rfkill_type=wwan
+
+modem_disable() {
+    if command -v mmcli >/dev/null 2>&1; then
+        modem_id=$(mmcli -L 2>/dev/null | grep -oE '/org/freedesktop/ModemManager[0-9]*/Modem/[0-9]+' | head -1)
+        if [ -n "$modem_id" ]; then
+            mmcli --modem="$modem_id" --disable 2>/dev/null || true
+        fi
+    fi
+}
+
+modem_enable() {
+    if command -v mmcli >/dev/null 2>&1; then
+        # unblock rfkill first so ModemManager can see the device
+        rfkill_unblock "$cell_rfkill_type"
+        modem_id=$(mmcli -L 2>/dev/null | grep -oE '/org/freedesktop/ModemManager[0-9]*/Modem/[0-9]+' | head -1)
+        if [ -n "$modem_id" ]; then
+            mmcli --modem="$modem_id" --enable 2>/dev/null || true
+        fi
+    fi
+}
+
+# ── status ────────────────────────────────────────────────────────────────────
+
+print_status() {
+    for type in wifi bluetooth "$cell_rfkill_type"; do
+        blocked="unblocked"
+        # Read soft-block state from sysfs – no root needed
+        for dev in /sys/class/rfkill/rfkill*; do
+            [ -f "$dev/type" ] || continue
+            dev_type=$(cat "$dev/type")
+            [ "$dev_type" = "$type" ] || continue
+            soft=$(cat "$dev/soft" 2>/dev/null || echo 0)
+            if [ "$soft" = "1" ]; then blocked="blocked (off)"; fi
+        done
+        label="$type"
+        [ "$type" = "$cell_rfkill_type" ] && label="cell (wwan)"
+        printf '%-20s: %s\n' "$label" "$blocked"
+    done
+}
+
+# ── main ──────────────────────────────────────────────────────────────────────
+
+radio="${1:-}"
+state="${2:-}"
+
+case "$radio" in
+    wifi)
+        case "$state" in
+            on)  rfkill_unblock wifi
+                 printf 'nhpro-radio-toggle: WiFi on\n' ;;
+            off) rfkill_block wifi
+                 printf 'nhpro-radio-toggle: WiFi off\n' ;;
+            *)   printf 'Usage: nhpro-radio-toggle wifi {on|off}\n' >&2; exit 1 ;;
+        esac
+        ;;
+    bluetooth|bt)
+        case "$state" in
+            on)  rfkill_unblock bluetooth
+                 printf 'nhpro-radio-toggle: Bluetooth on\n' ;;
+            off) rfkill_block bluetooth
+                 printf 'nhpro-radio-toggle: Bluetooth off\n' ;;
+            *)   printf 'Usage: nhpro-radio-toggle bluetooth {on|off}\n' >&2; exit 1 ;;
+        esac
+        ;;
+    cell|wwan)
+        case "$state" in
+            on)  modem_enable
+                 printf 'nhpro-radio-toggle: Cell on\n' ;;
+            off) modem_disable
+                 rfkill_block "$cell_rfkill_type"
+                 printf 'nhpro-radio-toggle: Cell off\n' ;;
+            *)   printf 'Usage: nhpro-radio-toggle cell {on|off}\n' >&2; exit 1 ;;
+        esac
+        ;;
+    all)
+        case "$state" in
+            off) rfkill_block all
+                 modem_disable
+                 printf 'nhpro-radio-toggle: all radios off\n' ;;
+            on)  modem_enable
+                 rfkill_unblock all
+                 printf 'nhpro-radio-toggle: all radios on\n' ;;
+            *)   printf 'Usage: nhpro-radio-toggle all {on|off}\n' >&2; exit 1 ;;
+        esac
+        ;;
+    status)
+        print_status
+        ;;
+    *)
+        printf 'Usage: nhpro-radio-toggle {wifi|bluetooth|cell|all} {on|off}\n' >&2
+        printf '       nhpro-radio-toggle status\n' >&2
+        exit 1
+        ;;
+esac

@@ -1,3 +1,4 @@
-# Allow any member of the sudo group to call nhpro-perf-toggle without a
-# password prompt so the GUI system manager can apply perf-mode changes live.
+# Allow any member of the sudo group to call NHPro toggle scripts without a
+# password prompt so the GUI system manager can apply changes live.
 %sudo ALL=(root) NOPASSWD: /usr/local/bin/nhpro-perf-toggle
+%sudo ALL=(root) NOPASSWD: /usr/local/bin/nhpro-radio-toggle

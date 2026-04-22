@@ -113,11 +113,23 @@ case "${1:-}" in
         persist stock
         printf 'nhpro-perf-toggle: mode set to stock (live + persisted)\n'
         ;;
+    restore-saved)
+        # Called by nhpro-perf-mode.service on boot – applies whichever mode
+        # was last persisted to /etc/nhpro/perf-mode without changing it.
+        saved=""
+        [ -f "$CONFIG_FILE" ] && saved=$(cat "$CONFIG_FILE")
+        case "$saved" in
+            stock) apply_stock
+                   printf 'nhpro-perf-toggle: restored stock mode from %s\n' "$CONFIG_FILE" ;;
+            *)     apply_uncapped
+                   printf 'nhpro-perf-toggle: restored uncapped mode from %s\n' "$CONFIG_FILE" ;;
+        esac
+        ;;
     status)
         print_status
         ;;
     *)
-        printf 'Usage: nhpro-perf-toggle {uncapped|stock|status}\n' >&2
+        printf 'Usage: nhpro-perf-toggle {uncapped|stock|restore-saved|status}\n' >&2
         exit 1
         ;;
 esac
