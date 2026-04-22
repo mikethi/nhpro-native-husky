@@ -48,10 +48,25 @@ def safe_path_component(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "_", value)
 
 
+def contains_control_chars(s: str) -> bool:
+    return any(ord(c) < 32 or ord(c) == 127 for c in s)
+
+
 def download_links(url_locations: dict[str, list[str]], destination: Path) -> list[dict[str, object]]:
     results: list[dict[str, object]] = []
 
     for index, (url, referenced_by) in enumerate(url_locations.items(), start=1):
+        if contains_control_chars(url):
+            results.append(
+                {
+                    "url": url,
+                    "referenced_by": sorted(set(referenced_by)),
+                    "status": "skipped",
+                    "error": "url contains ASCII control characters",
+                }
+            )
+            continue
+
         parsed = urllib.parse.urlparse(url)
         file_name = safe_path_component(
             "_".join(part for part in [parsed.netloc, parsed.path.strip("/"), parsed.query] if part)

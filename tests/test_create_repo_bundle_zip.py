@@ -60,15 +60,22 @@ class TestCreateRepoBundleZip(unittest.TestCase):
     def test_safe_path_component(self):
         self.assertEqual(module.safe_path_component("a/b?c=d"), "a_b_c_d")
 
+    def test_contains_control_chars(self):
+        self.assertFalse(module.contains_control_chars("https://ok.example/path"))
+        self.assertTrue(module.contains_control_chars("https://bad.example/\x05path"))
+
     def test_download_links_handles_success_and_size_failure(self):
         url_locations = {
             "https://ok.example/file.bin": ["a.txt"],
+            "https://skip.example/\x05file.bin": ["s.txt"],
             "https://bad.example/large.bin": ["b.txt"],
         }
 
         def fake_urlopen(request, timeout):
             if "ok.example" in request.full_url:
                 return FakeResponse([b"ab", b"cd"], content_length=4)
+            if "skip.example" in request.full_url:
+                raise AssertionError("skip.example URL should not be downloaded")
             return FakeResponse([b"x"], content_length=module.MAX_DOWNLOAD_BYTES + 1)
 
         with tempfile.TemporaryDirectory() as td:
@@ -80,8 +87,10 @@ class TestCreateRepoBundleZip(unittest.TestCase):
 
             self.assertEqual(results[0]["status"], "downloaded")
             self.assertEqual(results[0]["bytes"], 4)
-            self.assertEqual(results[1]["status"], "failed")
-            self.assertIn("content-length exceeds", results[1]["error"])
+            self.assertEqual(results[1]["status"], "skipped")
+            self.assertIn("control characters", results[1]["error"])
+            self.assertEqual(results[2]["status"], "failed")
+            self.assertIn("content-length exceeds", results[2]["error"])
 
             downloaded_path = destination.parent / results[0]["stored_as"]
             self.assertTrue(downloaded_path.exists())
