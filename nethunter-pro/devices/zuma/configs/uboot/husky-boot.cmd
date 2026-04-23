@@ -40,13 +40,13 @@
 #   ./addons/boot-selector/scripts/patch-magisk.sh --apk Magisk.apk --push-adb
 #
 # ── Userdata store layout ────────────────────────────────────────────────────
-#   /data/.linux/          kernel  initrd  cmdline   NetHunter Pro
-#   /data/.android-a/      kernel  initrd  cmdline   Android slot_a
-#   /data/.android-b/      kernel  initrd  cmdline   Android slot_b
-#   /data/.gsi/            kernel  initrd  cmdline   Android GSI
-#   /data/.recovery-a/     kernel  initrd  cmdline   Recovery slot_a
-#   /data/.recovery-b/     kernel  initrd  cmdline   Recovery slot_b
-#   /data/.magisk/         patch-initrd.cpio.gz      Magisk patch initrd
+#   /userdata/.linux/          kernel  initrd  cmdline   NetHunter Pro
+#   /userdata/.android-a/      kernel  initrd  cmdline   Android slot_a
+#   /userdata/.android-b/      kernel  initrd  cmdline   Android slot_b
+#   /userdata/.gsi/            kernel  initrd  cmdline   Android GSI
+#   /userdata/.recovery-a/     kernel  initrd  cmdline   Recovery slot_a
+#   /userdata/.recovery-b/     kernel  initrd  cmdline   Recovery slot_b
+#   /userdata/.magisk/         patch-initrd.cpio.gz      Magisk patch initrd
 #
 # ── Anti-Rollback Protection (ARP) note ────────────────────────────────────
 # ARP is enforced by the ABL on the bootloader partition via Titan M2.

@@ -148,6 +148,12 @@ run_target() {
     else
         echo "boot-selector[magisk-patch]: no ramdisk — patching kernel image \
 directly" >/dev/console
+        # Apply the selinux_enforcing hex patch.
+        # This patches two conditional branch instructions that would enforce
+        # kernel SELinux enforcing mode, converting them to branches that
+        # skip the enforcement check.  Required on some GKI kernels where
+        # selinux_enforcing is compiled in and magiskinit cannot override it
+        # via the init wrapper alone.
         "$MAGISKBOOT" hexpatch kernel \
             49010054011440B93FA00F71E9000054010840B93FA00F7189000054 \
             A1020054011440B93FA00F7140020054010840B93FA00F71E9010054 \

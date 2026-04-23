@@ -7,7 +7,7 @@
  * U-Boot then:
  *   1. Reads the BCB (Bootloader Control Block) from the misc partition to
  *      determine the active A/B slot — independently of the Google ABL.
- *   2. Presents a 9-entry boot menu (6 OS targets + 2 Magisk patch modes +
+ *   2. Presents a 10-entry boot menu (6 OS targets + 3 Magisk patch modes +
  *      emergency U-Boot shell).
  *   3. Loads the selected kernel from UFS userdata and boots it.
  *

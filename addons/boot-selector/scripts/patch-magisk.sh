@@ -188,8 +188,14 @@ install -m 644 "${ADDON_DIR}/boot-targets/_common.sh" \
                "${STAGE}/boot-targets/_common.sh" 2>/dev/null || true
 mkdir -p "${STAGE}/boot-targets"
 cat > "${STAGE}/boot-targets/_common_stub.sh" << 'EOF'
-# Minimal stub sourced by magisk-patch.sh in the patch-initrd context
-# Full _common.sh is not needed since we don't kexec from patch mode.
+# _common_stub.sh — minimal stub for patch-initrd context
+# Sourced by magisk-patch.sh instead of the full _common.sh.
+# The patch-initrd does not use kexec, so only the two functions called by
+# magisk-patch.sh's run_target() are needed:
+#   _find_userdata  — mount userdata for patching
+#   _fallback_linux — error path (reboots instead of kexec in this context)
+# If magisk-patch.sh is updated to call additional _common.sh functions,
+# add them here to prevent silent failures.
 _find_userdata() {
     for dev in /dev/sda* /dev/nvme0n1p* /dev/mmcblk0p*; do
         [ -b "$dev" ] || continue

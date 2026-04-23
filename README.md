@@ -108,7 +108,8 @@ For the full hardware component table (drivers, kernel modules, firmware paths),
 
 ```bash
 sudo apt install gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
-                 libssl-dev python3-pyelftools bison flex bc cpio
+                 libssl-dev python3-pyelftools bison flex bc cpio \
+                 make device-tree-compiler
 ```
 
 ### For Magisk patching

@@ -96,6 +96,9 @@ _build_android_cmdline() {
     # If no androidboot.* found in /proc/cmdline (non-ABL kernel or custom
     # kernel that doesn't forward ABL params), use safe defaults for an
     # unlocked husky device.
+    # NOTE: slot_suffix defaults to _a. If your active slot is _b and you
+    # have no androidboot.* in /proc/cmdline, use android-b.sh explicitly
+    # or write a cmdline file with the correct slot to the target's store.
     if [ -z "$inherited" ]; then
         echo "boot-selector[_common]: WARNING: no androidboot.* in /proc/cmdline" \
              "— using safe defaults (unlocked husky)" >/dev/console
@@ -193,12 +196,19 @@ _kexec_boot() {
     rm -f /tmp/bs-initrd
     [ -f "${sdir}/initrd" ] && cp "${sdir}/initrd" /tmp/bs-initrd
 
-    # Cmdline: stored file wins over computed default
+# Cmdline: stored file wins over computed default
     local cmdline="$default_cmdline"
     if [ -f "${sdir}/cmdline" ]; then
+        # IMPORTANT: the stored cmdline is used as a FULL REPLACEMENT for the
+        # computed default.  It must include ALL required params — including
+        # androidboot.* tokens — because the computed default will not be
+        # merged in.  Use this only when you need complete control over the
+        # cmdline (e.g. custom slot suffix or specific selinux mode).
+        # If you just need to append params, leave the cmdline file absent
+        # and let _build_android_cmdline() handle inheritance from ABL.
         cmdline="$(cat "${sdir}/cmdline")"
-        echo "boot-selector[_common]: using stored cmdline from ${store}/cmdline" \
-             >/dev/console
+        echo "boot-selector[_common]: using stored cmdline from ${store}/cmdline \
+(FULL OVERRIDE — ensure all androidboot.* params are present)" >/dev/console
     fi
 
     umount /run/boot-selector/mnt 2>/dev/null || true
