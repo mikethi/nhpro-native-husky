@@ -64,14 +64,31 @@ actions:
       - conky-all
       - python3-gi
       - rfkill
+      - e2fsprogs
+      - fuse3
 
   # ── Mark toggle scripts executable and enable boot service ───────────────
   - action: run
     description: Set toggle scripts executable
     chroot: true
-    command: chmod +x /usr/local/bin/nhpro-perf-toggle /usr/local/bin/nhpro-radio-toggle /usr/local/bin/nhpro-system-manager
+    command: chmod +x /usr/local/bin/nhpro-perf-toggle /usr/local/bin/nhpro-radio-toggle /usr/local/bin/nhpro-system-manager /usr/local/bin/nhpro-hw-init /usr/local/bin/nhpro-modem-mount /usr/local/bin/nhpro-usb-gadget /usr/local/bin/nhpro-usb-mode
 
   - action: run
     description: Enable NHPro CPU perf-mode restore service
     chroot: true
     command: systemctl enable nhpro-perf-mode.service
+
+  - action: run
+    description: Enable NHPro hardware init service (RC file translation)
+    chroot: true
+    command: systemctl enable nhpro-hw-init.service
+
+  - action: run
+    description: Enable NHPro USB gadget configfs service (11210000.dwc3, NCM default)
+    chroot: true
+    command: systemctl enable nhpro-usb-gadget.service
+
+  - action: run
+    description: Enable modem firmware FUSE mount (Shannon 5300, modem_a/b)
+    chroot: true
+    command: systemctl enable firmware-modem.mount

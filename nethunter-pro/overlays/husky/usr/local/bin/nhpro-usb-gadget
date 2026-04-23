@@ -1,0 +1,141 @@
+#!/bin/sh
+# nhpro-usb-gadget – USB gadget configfs setup for Google Pixel 8 Pro (husky)
+#
+# Direct translation of init.zuma.usb.rc  on early-boot.
+# No usbd HAL, no android.hardware.usb.gadget service.
+# Configures the Linux USB gadget subsystem via configfs directly.
+#
+# UDC (USB Device Controller): 11210000.dwc3
+#   MMIO: 0x11210000  (DWC3 SuperSpeed USB OTG controller)
+#   Confirmed by: init.zuma.usb.rc "setprop sys.usb.controller 11210000.dwc3"
+#                 fstab.husky "/devices/platform/11210000.usb*"
+#
+# Vendor ID:   0x18d1  (Google LLC)
+# Default mode for NHPro: NCM (USB Ethernet) – no HAL needed, works on all
+#   Linux/macOS/Windows hosts.  Activate with nhpro-usb-mode ncm.
+#
+# Supported modes (set via nhpro-usb-mode script):
+#   ncm    – USB Ethernet (CDC-NCM, best for Linux/macOS)
+#   rndis  – USB Ethernet (RNDIS, best for Windows)
+#   acm    – USB CDC-ACM serial console
+#   uvc    – USB Video Class webcam (MJPEG + YUV, 360p/480p/720p/1080p)
+#   none   – disconnect gadget (charging only)
+#
+# Source: init.zuma.usb.rc  on early-boot
+
+set -e
+
+GADGET=/config/usb_gadget/g1
+UDC=11210000.dwc3
+
+# configfs must be mounted
+if ! mountpoint -q /config 2>/dev/null; then
+    mount -t configfs configfs /config
+fi
+
+# ── Gadget skeleton ───────────────────────────────────────────────────────────
+mkdir -p "${GADGET}/strings/0x409"
+mkdir -p "${GADGET}/configs/b.1/strings/0x409"
+
+# Read device identity from kernel cmdline / DMI (best-effort)
+SERIAL=$(sed -n 's/.*androidboot\.serialno=\([^ ]*\).*/\1/p' /proc/cmdline 2>/dev/null || true)
+SERIAL=${SERIAL:-$(cat /sys/class/android_usb/android0/../../serial 2>/dev/null || echo "nhpro-husky")}
+
+printf '0x18d1' > "${GADGET}/idVendor"
+printf '%s'     "$SERIAL"           > "${GADGET}/strings/0x409/serialnumber"
+printf 'Google' > "${GADGET}/strings/0x409/manufacturer"
+printf 'Pixel 8 Pro' > "${GADGET}/strings/0x409/product"
+printf '0x384'  > "${GADGET}/configs/b.1/MaxPower"
+
+# OS descriptors (Windows WCID)
+printf '0x1'      > "${GADGET}/os_desc/b_vendor_code"
+printf 'MSFT100'  > "${GADGET}/os_desc/qw_sign"
+ln -sf "${GADGET}/configs/b.1" "${GADGET}/os_desc/b.1" 2>/dev/null || true
+
+# ── Functions ─────────────────────────────────────────────────────────────────
+
+# -- NCM (USB CDC-NCM Ethernet) -----------------------------------------------
+mkdir -p "${GADGET}/functions/ncm.gs9"
+printf 'WINNCM' > "${GADGET}/functions/ncm.gs9/os_desc/interface.ncm/compatible_id"
+printf 'ncm%d'  > "${GADGET}/functions/ncm.gs9/ifname"
+
+# -- RNDIS (USB Ethernet, Windows-compatible) ---------------------------------
+mkdir -p "${GADGET}/functions/rndis.gs4"
+printf 'e0' > "${GADGET}/functions/rndis.gs4/class"
+printf '01' > "${GADGET}/functions/rndis.gs4/subclass"
+printf '03' > "${GADGET}/functions/rndis.gs4/protocol"
+printf 'RNDIS'  > "${GADGET}/functions/rndis.gs4/os_desc/interface.ncm/compatible_id"
+printf 'rndis%d' > "${GADGET}/functions/rndis.gs4/ifname"
+
+# -- ACM (USB CDC-ACM serial console) ----------------------------------------
+mkdir -p "${GADGET}/functions/acm.gs6"
+
+# -- MIDI ---------------------------------------------------------------------
+mkdir -p "${GADGET}/functions/midi.gs5"
+
+# -- UVC (USB Video Class webcam) ---------------------------------------------
+mkdir -p "${GADGET}/functions/uvc.0"
+printf 'Android Webcam' > "${GADGET}/functions/uvc.0/function_name"
+printf '3072' > "${GADGET}/functions/uvc.0/streaming_maxpacket"
+printf '1'    > "${GADGET}/functions/uvc.0/streaming_maxburst"
+
+# UVC control header
+mkdir -p "${GADGET}/functions/uvc.0/control/header/h"
+ln -sf "${GADGET}/functions/uvc.0/control/header/h" \
+       "${GADGET}/functions/uvc.0/control/class/fs/h" 2>/dev/null || true
+ln -sf "${GADGET}/functions/uvc.0/control/header/h" \
+       "${GADGET}/functions/uvc.0/control/class/ss/h" 2>/dev/null || true
+
+# UVC MJPEG frames (Source: init.zuma.usb.rc)
+setup_mjpeg_frame() {
+    name=$1; w=$2; h=$3; bufsz=$4
+    d="${GADGET}/functions/uvc.0/streaming/mjpeg/m/${name}"
+    mkdir -p "$d"
+    printf '%s' "$h"      > "${d}/wHeight"
+    printf '%s' "$w"      > "${d}/wWidth"
+    printf '%s' "$bufsz"  > "${d}/dwMaxVideoFrameBufferSize"
+    printf '333333'       > "${d}/dwDefaultFrameInterval"
+    printf '166666\n333333\n416666\n666666' > "${d}/dwFrameInterval"
+}
+setup_mjpeg_frame 360p   640  360  460800
+setup_mjpeg_frame 480p   640  480  614400
+setup_mjpeg_frame 720p  1280  720 1843200
+setup_mjpeg_frame 1080p 1920 1080 4147200
+
+# UVC uncompressed (YUV) frames
+setup_yuv_frame() {
+    name=$1; w=$2; h=$3; bufsz=$4
+    d="${GADGET}/functions/uvc.0/streaming/uncompressed/u/${name}"
+    mkdir -p "$d"
+    printf '%s' "$h"      > "${d}/wHeight"
+    printf '%s' "$w"      > "${d}/wWidth"
+    printf '%s' "$bufsz"  > "${d}/dwMaxVideoFrameBufferSize"
+    printf '333333'       > "${d}/dwDefaultFrameInterval"
+    printf '166666\n333333\n416666\n666666' > "${d}/dwFrameInterval"
+}
+setup_yuv_frame 360p 640  360  460800
+setup_yuv_frame 480p 640  480  614400
+
+# UVC streaming header + class symlinks
+mkdir -p "${GADGET}/functions/uvc.0/streaming/header/h"
+ln -sf "${GADGET}/functions/uvc.0/streaming/mjpeg/m" \
+       "${GADGET}/functions/uvc.0/streaming/header/h/m" 2>/dev/null || true
+ln -sf "${GADGET}/functions/uvc.0/streaming/uncompressed/u" \
+       "${GADGET}/functions/uvc.0/streaming/header/h/u" 2>/dev/null || true
+for cls in fs hs ss; do
+    ln -sf "${GADGET}/functions/uvc.0/streaming/header/h" \
+           "${GADGET}/functions/uvc.0/streaming/class/${cls}/h" 2>/dev/null || true
+done
+
+# ── FunctionFS mount points (for ADB-style functions, kept for future use) ───
+mkdir -p /dev/usb-ffs
+# (ADB/MTP FunctionFS mounts are omitted; NHPro uses SSH over NCM instead)
+
+# ── Activate default mode: NCM ────────────────────────────────────────────────
+# Write configuration string and link the NCM function, then attach UDC.
+printf 'ncm' > "${GADGET}/configs/b.1/strings/0x409/configuration"
+ln -sf "${GADGET}/functions/ncm.gs9" "${GADGET}/configs/b.1/f1" 2>/dev/null || true
+printf '%s' "$UDC" > "${GADGET}/UDC"
+
+echo "nhpro-usb-gadget: USB gadget active – UDC=${UDC}, mode=ncm"
+echo "  Use 'nhpro-usb-mode <ncm|rndis|acm|uvc|none>' to switch function."

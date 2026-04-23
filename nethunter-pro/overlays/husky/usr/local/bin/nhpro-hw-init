@@ -301,6 +301,7 @@ done
 
 syswrite /dev/cpuset/top-app/cpus           "0-8"
 syswrite /dev/cpuset/foreground/cpus        "0-7"
+syswrite /dev/cpuset/foreground_window/cpus "0-7"
 syswrite /dev/cpuset/background/cpus        "0-3"
 syswrite /dev/cpuset/system-background/cpus "0-3"
 syswrite /dev/cpuset/restricted/cpus        "0-3"
@@ -395,6 +396,15 @@ syswrite /proc/sys/net/core/optmem_max          20480
 syswrite /proc/sys/net/core/netdev_max_backlog  10000
 syswrite /proc/sys/net/ipv4/tcp_rmem            "2097152 4194304 8388608"
 syswrite /proc/sys/net/ipv4/tcp_wmem            "262144 524288 8388608"
+syswrite /proc/sys/net/ipv4/tcp_mem             "44259 59012 88518"
+syswrite /proc/sys/net/ipv4/udp_mem             "88518 118025 177036"
+
+# RPS (Receive Packet Steering) for Shannon 5300 modem rmnet interfaces.
+# Source: init.zuma.rc  on init
+# 0xfe = cpu1-cpu7 (all non-boot cpus); spread modem RX across mid/big cores.
+for iface in 0 1 2 3 4 5 6 7; do
+    syswrite "/sys/class/net/rmnet${iface}/queues/rx-0/rps_cpus" fe
+done
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 20. Storage: UFS block I/O scheduler
@@ -473,7 +483,23 @@ syswrite "/sys/devices/platform/1f000000.mali/firmware_config/Log verbosity/cur"
 syswrite /sys/kernel/debug/tracing/tracing_on 0
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 27. Touch: default sensitivity mode (no screen protector)
+# 27. ECD (External Co-Processor Display?) firmware load
+#     Source: init.zuma.rc  on fs
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /proc/ecd/load_firmware 1
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 28. USB: descriptor enumeration timeout + block events polling
+#     Source: init.zuma.usb.rc  on boot
+#     USB OTG controller MMIO: 0x11210000  (UDC: 11210000.dwc3)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /sys/module/usbcore/parameters/initial_descriptor_timeout 500
+syswrite /sys/module/block/parameters/events_dfl_poll_msecs        2000
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 29. Touch: default sensitivity mode (no screen protector)
 #     Source: init.husky.rc  property:persist.vendor.touch_sensitivity_mode=0
 #     0 = normal sensitivity (no screen protector).
 #     Touch GTI (Google Touch Interface) at virtual device gti.0.
@@ -482,7 +508,7 @@ syswrite /sys/kernel/debug/tracing/tracing_on 0
 syswrite /sys/devices/virtual/goog_touch_interface/gti.0/screen_protector_mode_enabled 0
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 28. Sysfs ownership and permissions
+# 30. Sysfs ownership and permissions
 #     Source: init.zuma.rc  on fs / early-boot / boot
 #             init.husky.rc  on vendor.all.modules.ready=1
 #             init.zuma.rc   on property:vendor.device.modules.ready=1

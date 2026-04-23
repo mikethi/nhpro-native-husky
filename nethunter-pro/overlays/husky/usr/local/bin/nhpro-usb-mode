@@ -1,0 +1,66 @@
+#!/bin/sh
+# nhpro-usb-mode – switch the USB gadget function at runtime
+#
+# Usage: nhpro-usb-mode <mode>
+#   ncm    USB CDC-NCM Ethernet  (Linux/macOS host, best for SSH-over-USB)
+#   rndis  USB RNDIS Ethernet    (Windows host)
+#   acm    USB CDC-ACM serial    (serial console)
+#   uvc    USB Video Class       (webcam – phone camera to host)
+#   none   Detach UDC            (charging only)
+#
+# Source: init.zuma.usb.rc property-triggered function switches.
+# UDC: 11210000.dwc3  (MMIO 0x11210000)
+
+set -e
+
+GADGET=/config/usb_gadget/g1
+UDC=11210000.dwc3
+MODE=${1:-}
+
+if [ -z "$MODE" ]; then
+    echo "Usage: nhpro-usb-mode <ncm|rndis|acm|uvc|none>" >&2
+    exit 1
+fi
+
+# ── Detach and clear active function ─────────────────────────────────────────
+printf 'none' > "${GADGET}/UDC" 2>/dev/null || true
+rm -f "${GADGET}/configs/b.1/f1" "${GADGET}/configs/b.1/f2" 2>/dev/null || true
+
+case "$MODE" in
+    none)
+        echo "nhpro-usb-mode: USB gadget detached (charging only)"
+        exit 0
+        ;;
+
+    ncm)
+        printf 'ncm' > "${GADGET}/configs/b.1/strings/0x409/configuration"
+        ln -sf "${GADGET}/functions/ncm.gs9" "${GADGET}/configs/b.1/f1"
+        ;;
+
+    rndis)
+        # RNDIS function is created dynamically (allocates netif)
+        mkdir -p "${GADGET}/functions/rndis.gs4" 2>/dev/null || true
+        printf 'rndis' > "${GADGET}/configs/b.1/strings/0x409/configuration"
+        ln -sf "${GADGET}/functions/rndis.gs4" "${GADGET}/configs/b.1/f1"
+        ;;
+
+    acm)
+        printf 'acm' > "${GADGET}/configs/b.1/strings/0x409/configuration"
+        ln -sf "${GADGET}/functions/acm.gs6" "${GADGET}/configs/b.1/f1"
+        ;;
+
+    uvc)
+        printf 'uvc' > "${GADGET}/configs/b.1/strings/0x409/configuration"
+        ln -sf "${GADGET}/functions/uvc.0" "${GADGET}/configs/b.1/f1"
+        ;;
+
+    *)
+        echo "nhpro-usb-mode: unknown mode '${MODE}'" >&2
+        echo "  valid: ncm rndis acm uvc none" >&2
+        exit 1
+        ;;
+esac
+
+# ── Attach UDC ────────────────────────────────────────────────────────────────
+printf '%s' "$UDC" > "${GADGET}/UDC"
+echo "nhpro-usb-mode: active mode=${MODE}"

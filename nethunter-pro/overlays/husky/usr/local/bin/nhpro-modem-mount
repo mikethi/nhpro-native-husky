@@ -1,0 +1,53 @@
+#!/bin/sh
+# nhpro-modem-mount – FUSE-mount Samsung Shannon 5300 modem firmware partition
+#
+# Source: init.zuma.rc  "mount_all /vendor/etc/fstab.modem --early"
+#                        "restorecon_recursive /mnt/vendor/modem_img"
+#         cbd.rc         "-P by-name/${vendor.cbd.partition}"
+#                        "setprop vendor.cbd.partition modem${ro.boot.slot_suffix}"
+#
+# SoC:  Google Tensor G3 (zuma / Exynos GS301)
+# UFS:  MMIO 0x13200000  (platform device 13200000.ufs)
+#       Block: /dev/block/platform/13200000.ufs/by-name/modem_{a,b}
+#
+# The modem partition is ext4 and contains the Shannon 5300 (cpif) firmware
+# images.  We FUSE-mount it read-only at /firmware/modem so ModemManager,
+# the cpif/modem_if driver, and any userspace modem tools can access it
+# without requiring a kernel ext4 loop-mount.
+#
+# Tool: fuse2fs (from e2fsprogs)  – userspace ext4 FUSE driver.
+# Mount point: /firmware/modem   – matches Linux modem firmware convention.
+
+set -e
+
+MOUNT_POINT=/firmware/modem
+
+# ── Determine active A/B slot ─────────────────────────────────────────────────
+# The ABL passes androidboot.slot_suffix=_a or _b on the kernel cmdline.
+SLOT=$(sed -n 's/.*androidboot\.slot_suffix=\([^ ]*\).*/\1/p' /proc/cmdline 2>/dev/null || true)
+SLOT=${SLOT:-_a}    # default to slot A if not found
+
+# ── Locate modem block device ─────────────────────────────────────────────────
+# Primary: platform-specific path with MMIO address (most reliable).
+# Fallback: generic by-name symlink (created by udev rules).
+MODEM_DEV="/dev/block/platform/13200000.ufs/by-name/modem${SLOT}"
+if [ ! -b "$MODEM_DEV" ]; then
+    MODEM_DEV="/dev/block/by-name/modem${SLOT}"
+fi
+if [ ! -b "$MODEM_DEV" ]; then
+    echo "nhpro-modem-mount: modem block device not found for slot '${SLOT}'" >&2
+    echo "  tried: /dev/block/platform/13200000.ufs/by-name/modem${SLOT}" >&2
+    echo "  tried: /dev/block/by-name/modem${SLOT}" >&2
+    exit 1
+fi
+
+# ── Already mounted? ──────────────────────────────────────────────────────────
+if mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
+    echo "nhpro-modem-mount: $MOUNT_POINT already mounted – skipping"
+    exit 0
+fi
+
+# ── Mount ─────────────────────────────────────────────────────────────────────
+mkdir -p "$MOUNT_POINT"
+exec fuse2fs "$MODEM_DEV" "$MOUNT_POINT" \
+    -o ro,allow_other,noatime,default_permissions
