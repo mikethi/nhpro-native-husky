@@ -1,0 +1,151 @@
+# Google Pixel 8 Pro (husky) — Android partition flash config for dual-boot
+#
+# ⚠⚠⚠  IMPORTANT: READ BEFORE FLASHING  ⚠⚠⚠
+#
+# This config flashes the Android system partitions needed for dual-boot
+# (NetHunter Pro + Android / GSI / Recovery).  It intentionally does NOT
+# flash the bootloader or radio partitions.
+#
+# Anti-Rollback Protection (ARP) warning:
+#   The ABL (Android Bootloader, bootloader-husky-ripcurrent-*.img) enforces
+#   rollback protection via the Titan M2 security chip.  Once a factory image
+#   with a higher rollback index is booted, the Titan M2 programs the counter
+#   and PERMANENTLY prevents booting older images — including older ABL versions.
+#   NEVER flash a bootloader older than the one currently on the device.
+#
+# dm-verity:
+#   vbmeta is flashed with --disable-verity and --disable-verification to
+#   prevent dm-verity from blocking Android boot on an unlocked device.
+#   This is safe and expected; Android shows an orange warning screen for 5 s.
+#
+# Slot selection:
+#   These targets use slot = "all" to flash both A and B slots simultaneously.
+#   Adjust to "a" or "b" for single-slot operations.
+#
+# Usage:
+#   ./scripts/flash-husky.sh \
+#     --config nethunter-pro/devices/zuma/configs/android-partitions.toml
+#
+# Run from the directory containing the extracted factory image files, OR
+# point to their paths with --image <directory-prefix>.
+#
+# Full setup: use scripts/setup-android.sh which calls this config automatically.
+
+[device]
+codename     = "husky"
+manufacturer = "Google"
+model        = "Pixel 8 Pro"
+soc          = "zuma"
+arch         = "arm64"
+
+[flash]
+method    = "fastboot"
+boot_part = "boot"
+root_part = "userdata"
+
+# ── Flash targets ──────────────────────────────────────────────────────────────
+# Flash order matters:
+#   1. vbmeta FIRST with --disable-verity (disables AVB enforcement globally)
+#   2. vbmeta_system (for dynamic logical partitions)
+#   3. system, system_ext, product (logical partitions; GSI replaces system_a)
+#   4. vendor, vendor_dlkm (device-specific hardware blobs)
+#   5. userdata LAST (only for full factory reset; commented out by default)
+#
+# ── 1. vbmeta — disable dm-verity and AVB verification ──────────────────────
+# --disable-verity        disables dm-verity on all verity-enabled partitions
+# --disable-verification  disables signature verification in vbmeta
+# Both flags are required for Android to boot on an unlocked device without
+# showing error screens or dropping to recovery due to failed verification.
+
+[[flash.targets]]
+partition     = "vbmeta"
+image         = "${image}vbmeta.img"
+fastboot_flags = "--disable-verity,--disable-verification"
+optional      = false
+slot          = "all"
+
+[[flash.targets]]
+partition     = "vbmeta_system"
+image         = "${image}vbmeta_system.img"
+fastboot_flags = "--disable-verity,--disable-verification"
+optional      = true
+slot          = "all"
+
+[[flash.targets]]
+partition     = "vbmeta_vendor"
+image         = "${image}vbmeta_vendor.img"
+fastboot_flags = "--disable-verity,--disable-verification"
+optional      = true
+slot          = "all"
+
+# ── 2. system partitions ──────────────────────────────────────────────────────
+# system.img: the Android framework (framework.jar, app/, etc.)
+# For GSI: replace system.img with the downloaded GSI image BEFORE flashing.
+
+[[flash.targets]]
+partition = "system"
+image     = "${image}system.img"
+optional  = false
+slot      = "all"
+
+[[flash.targets]]
+partition = "system_ext"
+image     = "${image}system_ext.img"
+optional  = true
+slot      = "all"
+
+[[flash.targets]]
+partition = "product"
+image     = "${image}product.img"
+optional  = true
+slot      = "all"
+
+# ── 3. vendor partitions ──────────────────────────────────────────────────────
+# vendor.img: device-specific hardware blobs (audio, camera, GPU, modem HALs)
+# vendor_dlkm.img: vendor dynamic kernel modules
+
+[[flash.targets]]
+partition = "vendor"
+image     = "${image}vendor.img"
+optional  = true
+slot      = "all"
+
+[[flash.targets]]
+partition = "vendor_dlkm"
+image     = "${image}vendor_dlkm.img"
+optional  = true
+slot      = "all"
+
+[[flash.targets]]
+partition = "vendor_boot"
+image     = "${image}vendor_boot.img"
+optional  = true
+slot      = "all"
+
+# ── 4. init_boot (GKI generic ramdisk) ────────────────────────────────────────
+[[flash.targets]]
+partition = "init_boot"
+image     = "${image}init_boot.img"
+optional  = true
+slot      = "all"
+
+# ── 5. dtbo (Device Tree Blob Overlay) ────────────────────────────────────────
+[[flash.targets]]
+partition = "dtbo"
+image     = "${image}dtbo.img"
+optional  = true
+slot      = "all"
+
+# ── Full factory reset (commented out by default) ─────────────────────────────
+# Uncomment to wipe userdata (⚠ ALL USER DATA WILL BE ERASED).
+# Required only for a clean baseline before first-time NetHunter Pro install.
+#
+# [[flash.targets]]
+# partition = "userdata"
+# image     = "${image}userdata.img"
+# optional  = true
+
+# ── Intentionally excluded partitions ────────────────────────────────────────
+# bootloader — ARP-protected, version-locked; never reflash casually
+# radio       — modem firmware; update only from known-good factory image
+# See husky.toml and scripts/flash-husky.sh for enforcement guards.

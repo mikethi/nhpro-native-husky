@@ -98,25 +98,25 @@ fi
 parse_flash_targets() {
   local toml_file="$1"
   awk '
-  BEGIN { in_target=0; partition=""; image=""; optional="false"; slot="" }
+  BEGIN { in_target=0; partition=""; image=""; optional="false"; slot=""; fastboot_flags="" }
 
   # Detect start of a [[flash.targets]] block
   /^\[\[flash\.targets\]\]/ {
     # Flush previous block if any
     if (in_target) {
-      print "partition=" partition " image=" image " optional=" optional " slot=" slot
+      print "partition=" partition " image=" image " optional=" optional " slot=" slot " fastboot_flags=" fastboot_flags
     }
     in_target=1
-    partition=""; image=""; optional="false"; slot=""
+    partition=""; image=""; optional="false"; slot=""; fastboot_flags=""
     next
   }
 
   # Detect start of any other section – flush and leave target mode
   /^\[/ && !/^\[\[flash\.targets\]\]/ {
     if (in_target) {
-      print "partition=" partition " image=" image " optional=" optional " slot=" slot
+      print "partition=" partition " image=" image " optional=" optional " slot=" slot " fastboot_flags=" fastboot_flags
       in_target=0
-      partition=""; image=""; optional="false"; slot=""
+      partition=""; image=""; optional="false"; slot=""; fastboot_flags=""
     }
     next
   }
@@ -148,11 +148,17 @@ parse_flash_targets() {
       match($0, /=[[:space:]]*"([^"]*)"/, arr)
       slot = arr[1]
     }
+    # fastboot_flags = "value"  (comma-separated; spaces expand at call site)
+    else if (/^[[:space:]]*fastboot_flags[[:space:]]*=/) {
+      match($0, /=[[:space:]]*"([^"]*)"/, arr)
+      # Store with commas; caller expands commas to spaces
+      fastboot_flags = arr[1]
+    }
   }
 
   END {
     if (in_target && partition != "") {
-      print "partition=" partition " image=" image " optional=" optional " slot=" slot
+      print "partition=" partition " image=" image " optional=" optional " slot=" slot " fastboot_flags=" fastboot_flags
     }
   }
   ' "${toml_file}"
@@ -247,6 +253,9 @@ while IFS= read -r target_line; do
   raw_image="${fields[image]:-}"
   optional="${fields[optional]:-false}"
   slot="${fields[slot]:-}"
+  raw_fastboot_flags="${fields[fastboot_flags]:-}"
+  # Expand comma-separated flags back to space-separated arguments
+  fastboot_flags="${raw_fastboot_flags//,/ }"
 
   if [[ -z "${partition}" || -z "${raw_image}" ]]; then
     echo "[!] Skipping malformed target entry (missing partition or image)" >&2
@@ -268,7 +277,14 @@ while IFS= read -r target_line; do
   fi
 
   # Build fastboot command
+  # fastboot_flags (e.g. --disable-verity --disable-verification) go BEFORE
+  # the flash subcommand so fastboot sends them as global protocol flags.
   fastboot_args=("fastboot")
+  if [[ -n "${fastboot_flags}" ]]; then
+    # shellcheck disable=SC2206
+    read -ra extra_flags <<< "${fastboot_flags}"
+    fastboot_args+=("${extra_flags[@]}")
+  fi
   if [[ -n "${slot}" ]]; then
     fastboot_args+=("--slot" "${slot}")
   fi

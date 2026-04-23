@@ -2,46 +2,132 @@
 #
 # SoC: Google Tensor G3 (zuma / Samsung GS301, Exynos-derived)
 #
-# Values are sourced from the factory FBPK v2 bootloader image
+# Non-ABL boot model: U-Boot is packaged as the kernel payload in the Android
+# boot.img that Google ABL places on the boot_a/boot_b partition.  U-Boot then
+# reads the BCB (Bootloader Control Block) from the misc partition for A/B slot
+# selection and presents a boot menu with 6 variants + Magisk patch mode.
+#
+# Constants sourced from the factory FBPK v2 bootloader image
 # (bootloader-husky-ripcurrent-16.4-14540574.img).  See:
-#   scripts/extract_fbpk.py  — container extractor
-#   scripts/parse_abl.py     — ABL string analyser
-#   nethunter-pro/devices/zuma/configs/uboot/husky.h  — board include
+#   scripts/extract_fbpk.py          — FBPK v2 container extractor
+#   scripts/parse_abl.py             — ABL binary analyser
+#   device/google-husky/bootloader/ALGORITHM.txt — FBPK format spec
+#   nethunter-pro/devices/zuma/configs/uboot/husky.h        — board include
+#   nethunter-pro/devices/zuma/configs/uboot/husky-boot.cmd — boot script
+#
+# Upstream references:
+#   https://source.denx.de/u-boot/u-boot               — upstream U-Boot
+#   https://github.com/mikethi/zuma-husky-homebootloader — factory ABL / BCB
+#
+# Porting status (zuma SoC):
+#   UART console  — requires Samsung/Exynos UART driver port
+#   DRAM          — layout known; initialisation stub needed
+#   UFS 3.1       — controller at 0x13200000; PHY init + gear-3 config needed
+#   USB gadget    — DWC3 at 0x11210000; PHY init needed
+#   GIC / timers  — GIC-600 at 0x10400000; arm-gic-v3 driver needed
+#   GPIO / pinctrl — SoC-specific; needed for volume-key boot override
 #
 # ── Architecture ──────────────────────────────────────────────────────────
 CONFIG_ARM=y
-CONFIG_ARCH_EXYNOS=y		# Tensor G3 is Samsung Exynos-derived, not Qualcomm
+CONFIG_ARCH_EXYNOS=y			# Tensor G3 is Samsung Exynos-derived
+
+# ── Hush shell (required for if/then/fi in boot scripts) ─────────────────
+# Without this, the autoboot dispatcher and Magisk patch scripts cannot use
+# conditional logic.
+CONFIG_HUSH_PARSER=y
+CONFIG_SYS_PROMPT_HUSH_PS2="> "
 
 # ── Memory layout ─────────────────────────────────────────────────────────
-# CONFIG_SYS_TEXT_BASE: identified in bl2.bin as the staging base used
-# before kernel hand-off (above the secure DRAM carve-out at 0x92800000).
+# CONFIG_SYS_TEXT_BASE: staging base from bl2.bin (above 0x92800000 carve-out)
 CONFIG_SYS_TEXT_BASE=0xA0800000
-CONFIG_SYS_MALLOC_LEN=0x2000000	# 32 MB heap — same ballpark as SDM845 ports
-# CONFIG_SYS_LOAD_ADDR: arm64 TEXT_OFFSET (0x80000 above DRAM base).
-# Matches the kernel load address format string in abl.bin.
+CONFIG_SYS_MALLOC_LEN=0x2000000		# 32 MB heap
+# CONFIG_SYS_LOAD_ADDR: arm64 TEXT_OFFSET from abl.bin format string
 CONFIG_SYS_LOAD_ADDR=0x80080000
-CONFIG_SYS_BOOTM_LEN=0x4000000
-CONFIG_NR_DRAM_BANKS=2		# bank-0 @ 0x80000000, bank-1 @ 0x880000000
+CONFIG_SYS_BOOTM_LEN=0x8000000		# 128 MB — GKI kernels are large
+CONFIG_NR_DRAM_BANKS=2			# bank-0 @ 0x80000000, bank-1 @ 0x880000000
+
+# ── Environment (compiled-in; no persistent storage until UFS is ported) ──
+CONFIG_ENV_IS_NOWHERE=y
+CONFIG_ENV_SIZE=0x10000			# 64 KB — enough for all 6 boot targets
+CONFIG_BOOTDELAY=5			# 5 s countdown; press any key for menu
 
 # ── Board identity ─────────────────────────────────────────────────────────
-# Matches the version string embedded in abl.bin: "ripcurrent-16.4-14540574"
 CONFIG_IDENT_STRING=" husky-zuma-ripcurrent"
 
-# ── Fastboot / USB gadget ──────────────────────────────────────────────────
-CONFIG_CMD_FASTBOOT=y
-CONFIG_USB_GADGET=y
-# VID confirmed in abl.bin at offset 0x30158 (Google = 0x18D1)
-CONFIG_USB_GADGET_VENDOR_NUM=0x18D1
-# PID confirmed in abl.bin at offset 0x88422 (fastboot = 0x4EE7)
-CONFIG_USB_GADGET_PRODUCT_NUM=0x4EE7
+# ── Boot commands ──────────────────────────────────────────────────────────
+CONFIG_CMD_BOOTM=y			# bootm — Android v4 boot image
+CONFIG_CMD_BOOTI=y			# booti — raw arm64 Image + initrd
+CONFIG_CMD_BOOTMENU=y			# interactive 6-target boot menu
+CONFIG_CMD_ECHO=y
+CONFIG_CMD_TEST=y			# test / [ for if-then-fi in scripts
+CONFIG_CMD_ITEST=y
+CONFIG_CMD_SLEEP=y
+CONFIG_CMD_SETEXPR=y
+CONFIG_CMD_MEMORY=y			# md, mw, cp — DRAM inspection
+CONFIG_CMD_MISC=y
 
 # ── Android boot image support ─────────────────────────────────────────────
 CONFIG_ANDROID_BOOT_IMAGE=y
-CONFIG_CMD_ABOOTIMG=y
-CONFIG_ANDROID_AB=y		# husky uses A/B partition scheme
+CONFIG_CMD_ABOOTIMG=y			# abootimg: parse/query Android v4 boot.img
 
-# ── Storage ────────────────────────────────────────────────────────────────
-CONFIG_MMC_HS400_ES=y
-# UFS host controller at 0x13200000 (from fstab.husky:
-#   /dev/block/platform/13200000.ufs)
-CONFIG_DM_SCSI=y
+# ── A/B non-ABL slot selection ─────────────────────────────────────────────
+# U-Boot reads the BCB (Bootloader Control Block) from the misc partition to
+# determine the active slot without relying on Google ABL's decision.
+# BCB format: bootloader_message_ab / bootloader_control structs (AOSP).
+CONFIG_ANDROID_AB=y
+CONFIG_CMD_AB_SELECT=y			# ab_select <var> <dev> <misc_part>
+
+# ── Storage: UFS 3.1 via Exynos UFS controller at 0x13200000 ─────────────
+# Porting note: full driver requires PHY init, gear-3 configuration, and
+# Exynos UFS clock/power domain bring-up on the zuma SoC.
+# CONFIG_SCSI_UFS and CONFIG_UFS_EXYNOS are listed here as porting targets.
+CONFIG_DM=y				# driver model (prerequisite for BLK)
+CONFIG_BLK=y				# block device layer
+CONFIG_SCSI=y				# SCSI transport
+CONFIG_DM_SCSI=y			# SCSI driver model
+CONFIG_CMD_SCSI=y			# scsi scan, scsi dev
+# Uncomment when the Exynos UFS PHY driver is ported:
+# CONFIG_SCSI_UFS=y
+# CONFIG_UFS_EXYNOS=y
+
+# ── GPT partition access (required for part, ab_select, ext4load) ─────────
+CONFIG_PARTITION_UUIDS=y
+CONFIG_EFI_PARTITION=y			# EFI/GPT partition tables
+CONFIG_CMD_PART=y			# part start/size/number/uuid
+CONFIG_CMD_GPT=y			# gpt verify, gpt write
+
+# ── Filesystem access ──────────────────────────────────────────────────────
+# ext4: read Android userdata (.android-a/, .android-b/, .gsi/, .magisk/, …)
+CONFIG_FS_EXT4=y
+CONFIG_CMD_EXT4=y			# ext4load, ext4ls
+CONFIG_EXT4_WRITE=n			# read-only for safety
+# FAT: load boot scripts or kernels from USB sticks
+CONFIG_FS_FAT=y
+CONFIG_FAT_WRITE=n
+CONFIG_CMD_FAT=y			# fatload, fatls
+
+# ── USB host (emergency: load kernel or boot script from USB storage) ──────
+CONFIG_DM_USB=y
+CONFIG_USB_XHCI_HCD=y			# xHCI (USB 3.x) host controller
+CONFIG_USB_STORAGE=y
+CONFIG_CMD_USB=y			# usb start, usb dev, usb ls
+
+# ── Network / TFTP (emergency: remote kernel load, CI automation) ─────────
+CONFIG_NET=y
+CONFIG_CMD_NET=y
+CONFIG_CMD_TFTPBOOT=y			# tftpboot — load kernel from TFTP server
+CONFIG_CMD_DHCP=y
+CONFIG_CMD_PING=y
+
+# ── Fastboot / USB gadget ──────────────────────────────────────────────────
+# VID/PID confirmed in abl.bin at offsets 0x30158 / 0x88422
+CONFIG_CMD_FASTBOOT=y
+CONFIG_USB_GADGET=y
+CONFIG_USB_GADGET_VENDOR_NUM=0x18D1	# Google
+CONFIG_USB_GADGET_PRODUCT_NUM=0x4EE7	# fastboot
+CONFIG_FASTBOOT_FLASH=y
+CONFIG_FASTBOOT_FLASH_MMC=y		# UFS appears as MMC in fastboot protocol
+CONFIG_ANDROID_SPARSE_IMAGE=y		# sparse image support for factory flash
+# Fastboot buffer: at INITRD_LOAD_ADDR with 512 MB capacity
+CONFIG_FASTBOOT_BUF_ADDR=0x84000000
+CONFIG_FASTBOOT_BUF_SIZE=0x20000000
