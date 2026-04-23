@@ -1,3 +1,13 @@
+# Sourced verbatim from https://github.com/mikethi/zuma-husky-homebootloader/blob/main/fstab.husky
+#
+# NOTE – intentional duplicate / fallback entries:
+#   * system appears twice: the second entry is a GSI compliance fallback (see inline comment).
+#   * /data appears twice: Android init tries f2fs first, falls back to ext4.
+#   * /metadata appears twice: same f2fs-first / ext4-fallback pattern.
+#   * The fstab header block is repeated mid-file to split the system/logical
+#     section from the userdata/metadata section – standard Android practice
+#     for first-stage-mount fstabs.
+#
 # Android fstab file.
 #
 # The filesystem that contains the filesystem checker binary (typically /system) cannot

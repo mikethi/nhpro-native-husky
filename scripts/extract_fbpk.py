@@ -56,7 +56,7 @@ import struct
 import sys
 from pathlib import Path
 
-# ── Format constants (from algorythm.txt) ────────────────────────────────────
+# ── Format constants (from ALGORITHM.txt) ────────────────────────────────────
 FBPK_MAGIC = b"FBPK"
 FBPK_SUPPORTED_VERSION = 2
 
@@ -338,8 +338,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Parse and extract a Google Pixel FBPK v2 bootloader container.\n\n"
-            "The format specification is documented in algorythm.txt inside the\n"
-            "kali-nethunter-pro bootloader repository (.upstream/)."
+            "The format specification is documented in ALGORITHM.txt inside the\n"
+            "zuma-husky-homebootloader repository (https://github.com/mikethi/zuma-husky-homebootloader)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
