@@ -1,0 +1,135 @@
+# Google Pixel 8 Pro (husky) – device-node and sysfs permissions
+# SoC:  Google Tensor G3 (zuma / Exynos GS301)
+# Boot: BL1→PBL→BL2→BL31→TZ→GSA→ABL → Sultan kernel → systemd
+#       (no HAL, no Halium, no Android init)
+#
+# Uses exact MMIO platform device addresses from:
+#   init.zuma.rc, init.husky.rc, init.zuma.usb.rc, fstab.husky
+#
+# MMIO map:
+#   UFS controller      0x13200000   (platform device 13200000.ufs)
+#   USB OTG (DWC3)      0x11210000   (platform device 11210000.dwc3 / 11210000.usb)
+#   BT UART             0x175b0000   (platform device 175b0000.serial)
+#   BT debug UART       0x155d0000   (platform device 155d0000.serial)
+#   GPS SPI             0x111e0000   (platform device 111e0000.spi)
+#   ABOX audio DSP      0x17c50000   (platform device 17c50000.abox)
+#   VTS                 0x13810000   (platform device 13810000.vts)
+#   DECON display       0x19470000   (platform device 19470000.drmdecon)
+#   MIPI-DSI 0/1        0x19440000 / 0x19450000
+#   memlat devfreq      0x17000010
+#   Mali GPU            0x1f000000   (platform device 1f000000.mali)
+#   GSA                 0x16490000   (platform device 16490000.gsa-ns)
+#   PCIe 0/1            0x12100000 / 0x13120000
+#   Haptics CS40L26     I2C bus 0 addr 0x43  (sysfs: 0-0043)
+#   AOC co-processor    0x17000000
+
+# ---------------------------------------------------------------------------
+# Bluetooth rfkill – BlueZ needs rfkill write access without running as root
+# Source: init.zuma.rc  on early-boot
+# ---------------------------------------------------------------------------
+KERNEL=="rfkill", SUBSYSTEM=="misc", GROUP="bluetooth", MODE="0660"
+
+# ---------------------------------------------------------------------------
+# Touch offload device (/dev/touch_offload)
+# Source: init.zuma.rc  on property:vendor.device.modules.ready=1
+# ---------------------------------------------------------------------------
+KERNEL=="touch_offload", GROUP="input", MODE="0660"
+
+# ---------------------------------------------------------------------------
+# GPS: BBD Broadcom GPS bridge devices
+# Source: init.zuma.rc  on post-fs-data
+# ---------------------------------------------------------------------------
+KERNEL=="bbd_control",  GROUP="dialout", MODE="0660"
+KERNEL=="bbd_patch",    GROUP="dialout", MODE="0660"
+KERNEL=="bbd_sensor",   GROUP="dialout", MODE="0660"
+KERNEL=="bbd_pwrstat",  GROUP="dialout", MODE="0644"
+KERNEL=="ttyBCM",       GROUP="dialout", MODE="0660"
+
+# ---------------------------------------------------------------------------
+# Nanohub sensor hub coprocessor
+# Source: init.zuma.rc  on init
+# ---------------------------------------------------------------------------
+KERNEL=="nanohub",       GROUP="root", MODE="0660"
+KERNEL=="nanohub_comms", GROUP="root", MODE="0660"
+
+# ---------------------------------------------------------------------------
+# Battery history ring buffer
+# Source: init.zuma.rc  on init
+# ---------------------------------------------------------------------------
+KERNEL=="battery_history", GROUP="root", MODE="0644"
+
+# ---------------------------------------------------------------------------
+# ISP ranging sensor (ToF) – /dev/ispolin_ranging
+# Source: init.zuma.rc  on post-fs-data
+# ---------------------------------------------------------------------------
+KERNEL=="ispolin_ranging", GROUP="video", MODE="0660"
+
+# ---------------------------------------------------------------------------
+# EdgeTPU / Google Tensor Processing Unit
+# Source: init.zuma.rc  on post-fs-data (symlink edgetpu-soc → edgetpu)
+# ---------------------------------------------------------------------------
+KERNEL=="edgetpu-soc", GROUP="root", MODE="0660"
+KERNEL=="edgetpu",     GROUP="root", MODE="0660"
+
+# ---------------------------------------------------------------------------
+# Socket tagging (xt_qtaguid) – used by traffic monitoring / NetHunter tools
+# Source: init.rc (homebootloader repo)  on boot
+# ---------------------------------------------------------------------------
+KERNEL=="xt_qtaguid", MODE="0644"
+
+# ---------------------------------------------------------------------------
+# USB tun device – needed for VPN / IMS WiFi calling (charonservice)
+# Source: init.zuma.rc  on property:vendor.charon.exec=1
+# ---------------------------------------------------------------------------
+KERNEL=="tun", GROUP="vpn", MODE="0660"
+
+# ---------------------------------------------------------------------------
+# USB OTG DWC3 controller (MMIO 0x11210000)
+# Source: init.zuma.usb.rc  "setprop sys.usb.controller 11210000.dwc3"
+#         fstab.husky        "/devices/platform/11210000.usb*"
+# Ensure the dwc3 and dwc3_exynos modules are loaded when the controller probes.
+# (Also handled by 50-husky-firmware.rules via DRIVER==exynos-dwusb, kept for
+# belt-and-suspenders coverage of the platform bus path.)
+# ---------------------------------------------------------------------------
+ACTION=="add", KERNEL=="11210000.usb", SUBSYSTEM=="platform", \
+    RUN{builtin}+="kmod load dwc3_exynos"
+
+# ---------------------------------------------------------------------------
+# UFS storage controller (MMIO 0x13200000)
+# Source: fstab.husky  /dev/block/platform/13200000.ufs/by-name/*
+# (Also handled by 50-husky-firmware.rules via DRIVER==exynos-ufs.)
+# ---------------------------------------------------------------------------
+ACTION=="add", KERNEL=="13200000.ufs", SUBSYSTEM=="platform", \
+    RUN{builtin}+="kmod load ufs_exynos"
+
+# ---------------------------------------------------------------------------
+# AOC always-on coprocessor reset – root:system
+# Source: init.zuma.rc  on sys.boot_completed=1
+# MMIO: 0x17000000
+# ---------------------------------------------------------------------------
+ACTION=="add", KERNEL=="17000000.aoc", SUBSYSTEM=="platform", \
+    RUN+="/bin/chmod 0220 /sys/devices/platform/17000000.aoc/reset"
+
+# ---------------------------------------------------------------------------
+# CPIF / modem interface – Shannon 5300 character devices
+# Source: cbd.rc (cpif/modem_if kernel driver)
+# ModemManager uses /dev/umts_ipc0 and /dev/umts_rfs0 for AT+data channels.
+# ---------------------------------------------------------------------------
+KERNEL=="umts_ipc[0-9]*",   GROUP="dialout", MODE="0660"
+KERNEL=="umts_rfs[0-9]*",   GROUP="dialout", MODE="0660"
+KERNEL=="ipc_multi_raw[0-9]*", GROUP="dialout", MODE="0660"
+KERNEL=="btty[0-9]*",       GROUP="dialout", MODE="0660"
+
+# ---------------------------------------------------------------------------
+# Modem temperature sensor (cp-tm1 platform device)
+# Source: init.zuma.rc  on post-fs-data  "chown radio system /sys/.../cp_temp"
+# ---------------------------------------------------------------------------
+ACTION=="add", KERNEL=="cp-tm1", SUBSYSTEM=="platform", \
+    RUN+="/bin/chmod 0440 /sys/devices/platform/cp-tm1/cp_temp"
+
+# ---------------------------------------------------------------------------
+# Displayport TypeC mode (exynos_drm dp_enabled)
+# Source: init.zuma.usb.rc property:persist.vendor.usb.displayport.enabled
+# ---------------------------------------------------------------------------
+ACTION=="add", KERNEL=="exynos-drm", SUBSYSTEM=="platform", \
+    RUN+="/bin/chmod 0664 /sys/module/exynos_drm/parameters/dp_enabled"

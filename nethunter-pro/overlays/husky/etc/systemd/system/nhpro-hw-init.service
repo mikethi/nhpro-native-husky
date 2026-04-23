@@ -1,0 +1,18 @@
+[Unit]
+Description=NHPro hardware init – zuma/husky RC file translation
+Documentation=https://github.com/mikethi/nhpro-native-husky
+# Run after kernel modules are loaded so /proc/vendor_sched, the sched_pixel
+# cpufreq governor sysfs paths, and UFS block sysfs are all available.
+# Run before basic.target so every hardware knob is set before any user
+# service starts, and well before nhpro-perf-mode.service (multi-user.target).
+DefaultDependencies=no
+After=systemd-modules-load.service
+Before=basic.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/nhpro-hw-init
+
+[Install]
+WantedBy=basic.target

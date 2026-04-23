@@ -1,0 +1,633 @@
+#!/bin/sh
+# nhpro-hw-init – one-shot hardware init for Google Pixel 8 Pro (husky / zuma)
+#
+# Translates Android vendor init RC files to Linux sysfs/procfs writes.
+# No HAL, no Halium.  Every write targets a direct kernel interface.
+#
+# Source RC files (repo root):
+#   init.zuma.rc         – SoC-wide scheduler, devfreq, power, display, BT, GPS
+#   init.pixel-perf.rc   – vendor_sched groups, CPUfreq governor, sched_qos
+#   init.husky.rc        – device-specific: haptics, touch, WiFi, display
+#   init.zuma.storage.rc – UFS block scheduler
+#   init.power-gs.rc     – pm_freeze_timeout
+#
+# SoC:    Google Tensor G3  (zuma / Exynos GS301)
+# Kernel: Sultan kernel     (linux-image-arm64, google-zuma)
+# Boot:   BL1→PBL→BL2→BL31→TZ→GSA→ABL → Sultan kernel → systemd
+#         (no Android init, no HAL, no Halium)
+#
+# Key MMIO addresses (from init RC files + fstab.husky):
+#   UFS controller    0x13200000   (platform device 13200000.ufs)
+#   USB OTG           0x11210000   (platform device 11210000.usb)
+#   BT UART           0x175b0000   (platform device 175b0000.serial)
+#   GPS SPI           0x111e0000   (platform device 111e0000.spi)
+#   ABOX audio DSP    0x17c50000   (platform device 17c50000.abox)
+#   DECON display     0x19470000   (platform device 19470000.drmdecon)
+#   MIPI-DSI 0/1      0x19440000 / 0x19450000
+#   memlat devfreq    0x17000010   (devfreq_mif)
+#   dsulat devfreq    0x17000090   (devfreq_dsu_lat)
+#   MIF devfreq       0x17000010
+#   Mali GPU          0x1f000000   (platform device 1f000000.mali)
+#   GSA               0x16490000   (platform device 16490000.gsa-ns)
+#   PCIe 0/1          0x12100000 / 0x13120000
+#   Haptics CS40L26   I2C bus 0 addr 0x43  (0-0043)
+#
+# Ownership note: nhpro-perf-mode.service (nhpro-perf-toggle) runs AFTER this
+# script and owns the following – do NOT write them here:
+#   /proc/sys/kernel/sched_pelt_multiplier
+#   /proc/vendor_sched/auto_uclamp_max
+#   /proc/vendor_sched/groups/{bg,sys_bg,ota}/uclamp_max
+#   /proc/vendor_sched/uclamp_max_filter_enable
+#   /sys/devices/system/cpu/cpufreq/policy{0,4,8}/sched_pixel/pmu_limit_enable
+
+set -e
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+syswrite() {
+    # Write $2 to sysfs/procfs path $1; silently skip if path absent.
+    [ -e "$1" ] && printf '%s' "$2" > "$1" 2>/dev/null || true
+}
+
+sysown() {
+    # chown $2 and (optionally) chmod $3 on path $1 if it exists.
+    [ -e "$1" ] || return 0
+    chown "$2" "$1" 2>/dev/null || true
+    [ -n "${3:-}" ] && chmod "$3" "$1" 2>/dev/null || true
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 1.  CPU IDLE GOVERNOR – teo
+#     Source: init.zuma.rc  on init
+#
+#     TEO (Timer Events Oriented) is better than menu for the zuma cluster
+#     layout.  Util-awareness thresholds: little cores gate at ~0.2 %
+#     utilisation (threshold 2); mid/big cores disabled (1024 = always enter
+#     deepest idle state).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /sys/devices/system/cpu/cpuidle/current_governor   teo
+syswrite /proc/vendor_sched/teo_util_threshold              "2 1024 1024"
+syswrite /sys/kernel/metrics/cpuidle_histogram/enable       1
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 2.  CPUFREQ GOVERNOR – sched_pixel
+#     Source: init.pixel-perf.rc  on init  (governor + up_rate_limit_us)
+#             init.zuma.rc         on late-init  (per-cluster down_rate_limit_us)
+#
+#     Tensor G3 cluster layout:
+#       policy0  cpu0-cpu3  Klein  (little,  max ~2050 MHz)
+#       policy4  cpu4-cpu7  Makalu (mid,     max ~2450 MHz)
+#       policy8  cpu8       Prime  (big,     max ~2860 MHz)
+#
+#     All clusters:  up_rate_limit_us = 500 µs
+#     Little (p0):   down_rate_limit_us = 5000 µs  (5 ms)
+#     Mid+big (p4/p8): down_rate_limit_us = 20000 µs (20 ms)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+for cpu in 0 1 2 3 4 5 6 7 8; do
+    syswrite "/sys/devices/system/cpu/cpu${cpu}/cpufreq/scaling_governor"              sched_pixel
+    syswrite "/sys/devices/system/cpu/cpu${cpu}/cpufreq/sched_pixel/up_rate_limit_us"  500
+done
+
+# Little cluster – final down rate limit (overrides init.pixel-perf.rc 500 µs)
+for cpu in 0 1 2 3; do
+    syswrite "/sys/devices/system/cpu/cpu${cpu}/cpufreq/sched_pixel/down_rate_limit_us" 5000
+done
+
+# Mid + prime clusters
+for cpu in 4 5 6 7 8; do
+    syswrite "/sys/devices/system/cpu/cpu${cpu}/cpufreq/sched_pixel/down_rate_limit_us" 20000
+done
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 3.  PMU SPC / LCPI frequency limits
+#     Source: init.zuma.rc  on sys.boot_completed=1
+#
+#     Adaptive per-cluster frequency cap when the workload is DRAM-bound
+#     (stalls-per-cycle > spc_threshold).  lcpi_threshold 0 disables the LCPI
+#     path; only the SPC path is active.
+#     pmu_limit_enable is written by nhpro-perf-toggle – NOT here.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# policy0 – Klein  (little, max ~2050 MHz) → SPC limit 1.328 GHz (64.8 %)
+syswrite /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/lcpi_threshold  0
+syswrite /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/spc_threshold   76
+syswrite /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/limit_frequency 1328000
+
+# policy4 – Makalu (mid,    max ~2450 MHz) → SPC limit 1.836 GHz (74.9 %)
+syswrite /sys/devices/system/cpu/cpufreq/policy4/sched_pixel/lcpi_threshold  0
+syswrite /sys/devices/system/cpu/cpufreq/policy4/sched_pixel/spc_threshold   73
+syswrite /sys/devices/system/cpu/cpufreq/policy4/sched_pixel/limit_frequency 1836000
+
+# policy8 – Prime  (big,   max ~2860 MHz) → SPC limit 2.363 GHz (82.6 %)
+syswrite /sys/devices/system/cpu/cpufreq/policy8/sched_pixel/lcpi_threshold  0
+syswrite /sys/devices/system/cpu/cpufreq/policy8/sched_pixel/spc_threshold   68
+syswrite /sys/devices/system/cpu/cpufreq/policy8/sched_pixel/limit_frequency 2363000
+
+syswrite /proc/vendor_sched/pmu_poll_time 10
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 4.  VENDOR_SCHED: sched_qos feature enables
+#     Source: init.pixel-perf.rc  on init
+#
+#     Enable all sched_qos knobs for every latency-sensitive group.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+for grp in ta fg fg_wi cam cam_power rt sf sys nnapi; do
+    b="/proc/vendor_sched/groups/${grp}"
+    syswrite "${b}/qos_adpf_enable"              1
+    syswrite "${b}/qos_auto_uclamp_max_enable"   1
+    syswrite "${b}/qos_boost_prio_enable"        1
+    syswrite "${b}/qos_preempt_wakeup_enable"    1
+    syswrite "${b}/qos_prefer_fit_enable"        1
+    syswrite "${b}/qos_prefer_high_cap_enable"   1
+    syswrite "${b}/qos_prefer_idle_enable"       1
+    syswrite "${b}/qos_rampup_multiplier_enable" 1
+done
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5.  VENDOR_SCHED: rampup multiplier
+#     Source: init.pixel-perf.rc  on init
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /proc/vendor_sched/groups/bg/rampup_multiplier        0
+syswrite /proc/vendor_sched/groups/cam/rampup_multiplier       1
+syswrite /proc/vendor_sched/groups/cam_power/rampup_multiplier 1
+syswrite /proc/vendor_sched/groups/dex2oat/rampup_multiplier   0
+syswrite /proc/vendor_sched/groups/fg/rampup_multiplier        0
+syswrite /proc/vendor_sched/groups/fg_wi/rampup_multiplier     1
+syswrite /proc/vendor_sched/groups/nnapi/rampup_multiplier     0
+syswrite /proc/vendor_sched/groups/ota/rampup_multiplier       0
+syswrite /proc/vendor_sched/groups/rt/rampup_multiplier        0
+syswrite /proc/vendor_sched/groups/sf/rampup_multiplier        1
+syswrite /proc/vendor_sched/groups/sys/rampup_multiplier       0
+syswrite /proc/vendor_sched/groups/sys_bg/rampup_multiplier    0
+syswrite /proc/vendor_sched/groups/ta/rampup_multiplier        1
+syswrite /proc/vendor_sched/adpf_rampup_multiplier             4
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 6.  VENDOR_SCHED: util_est (utilisation estimator)
+#     Source: init.pixel-perf.rc  on init
+#     1 = disable util_est for the group (use instantaneous util only).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /proc/vendor_sched/groups/bg/disable_util_est        1
+syswrite /proc/vendor_sched/groups/cam/disable_util_est       0
+syswrite /proc/vendor_sched/groups/cam_power/disable_util_est 0
+syswrite /proc/vendor_sched/groups/dex2oat/disable_util_est   1
+syswrite /proc/vendor_sched/groups/fg/disable_util_est        1
+syswrite /proc/vendor_sched/groups/fg_wi/disable_util_est     0
+syswrite /proc/vendor_sched/groups/nnapi/disable_util_est     1
+syswrite /proc/vendor_sched/groups/ota/disable_util_est       1
+syswrite /proc/vendor_sched/groups/rt/disable_util_est        1
+syswrite /proc/vendor_sched/groups/sf/disable_util_est        0
+syswrite /proc/vendor_sched/groups/sys/disable_util_est       1
+syswrite /proc/vendor_sched/groups/sys_bg/disable_util_est    1
+syswrite /proc/vendor_sched/groups/ta/disable_util_est        0
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 7.  VENDOR_SCHED: batch (CFS SCHED_BATCH) policy
+#     Source: init.pixel-perf.rc  on init
+#     1 = schedule the group with SCHED_BATCH (lower wakeup latency penalty).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /proc/vendor_sched/groups/bg/use_batch_policy        1
+syswrite /proc/vendor_sched/groups/cam/use_batch_policy       0
+syswrite /proc/vendor_sched/groups/cam_power/use_batch_policy 0
+syswrite /proc/vendor_sched/groups/dex2oat/use_batch_policy   0
+syswrite /proc/vendor_sched/groups/fg/use_batch_policy        0
+syswrite /proc/vendor_sched/groups/fg_wi/use_batch_policy     0
+syswrite /proc/vendor_sched/groups/nnapi/use_batch_policy     0
+syswrite /proc/vendor_sched/groups/ota/use_batch_policy       0
+syswrite /proc/vendor_sched/groups/rt/use_batch_policy        0
+syswrite /proc/vendor_sched/groups/sf/use_batch_policy        0
+syswrite /proc/vendor_sched/groups/sys/use_batch_policy       0
+syswrite /proc/vendor_sched/groups/sys_bg/use_batch_policy    1
+syswrite /proc/vendor_sched/groups/ta/use_batch_policy        0
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 8.  VENDOR_SCHED: uclamp_min and prefer_idle – post-boot values
+#     Source: init.pixel-perf.rc + init.zuma.rc  on sys.boot_completed=1
+#
+#     These replace the temporary high boot-time values that init.zuma.rc sets
+#     during init (221/1024 ≈ 21.6 % to speed up startup).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /proc/vendor_sched/groups/ta/uclamp_min    1
+syswrite /proc/vendor_sched/groups/fg/uclamp_min    0
+syswrite /proc/vendor_sched/groups/sys/uclamp_min   0
+syswrite /proc/vendor_sched/groups/sys/prefer_idle  0
+
+# Camera: prefer idle cores; small uclamp_min floor for responsiveness
+syswrite /proc/vendor_sched/groups/cam/prefer_idle  1
+syswrite /proc/vendor_sched/groups/cam/uclamp_min   1
+
+# NNAPI: boost uclamp_min for inference latency; do not prefer idle
+syswrite /proc/vendor_sched/groups/nnapi/prefer_idle 0
+syswrite /proc/vendor_sched/groups/nnapi/uclamp_min  512
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 9.  VENDOR_SCHED: preferred_idle_mask – post-boot values
+#     Source: init.zuma.rc  on sys.boot_completed=1
+#     0xff  = all 8 CPUs (cpu0-cpu7)
+#     0x1ff = all 9 CPUs (cpu0-cpu8)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /proc/vendor_sched/groups/ta/preferred_idle_mask_low   0xff
+syswrite /proc/vendor_sched/groups/ta/preferred_idle_mask_mid   0xff
+syswrite /proc/vendor_sched/groups/ta/preferred_idle_mask_high  0xff
+syswrite /proc/vendor_sched/groups/fg/preferred_idle_mask_low   0x1ff
+syswrite /proc/vendor_sched/groups/fg/preferred_idle_mask_mid   0x1ff
+syswrite /proc/vendor_sched/groups/fg/preferred_idle_mask_high  0x1ff
+syswrite /proc/vendor_sched/groups/sys/preferred_idle_mask_low  0x1ff
+syswrite /proc/vendor_sched/groups/sys/preferred_idle_mask_mid  0x1ff
+syswrite /proc/vendor_sched/groups/sys/preferred_idle_mask_high 0x1ff
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 10. VENDOR_SCHED: scheduler latency parameters
+#     Source: init.pixel-perf.rc  on sys.boot_completed=1
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /proc/vendor_sched/min_granularity_ns        1000000
+syswrite /proc/vendor_sched/latency_ns                8000000
+syswrite /proc/vendor_sched/max_load_balance_interval 1
+syswrite /proc/vendor_sched/enable_hrtick             1
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 11. VENDOR_SCHED: ug (utilisation group) assignments + bg throttle
+#     Source: init.pixel-perf.rc  on sys.boot_completed=1
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /proc/vendor_sched/groups/bg/ug       0
+syswrite /proc/vendor_sched/groups/sys_bg/ug   0
+syswrite /proc/vendor_sched/groups/ota/ug      0
+syswrite /proc/vendor_sched/groups/dex2oat/ug  1
+syswrite /proc/vendor_sched/groups/ta/ug       1
+syswrite /proc/vendor_sched/ug_bg_group_throttle 308
+
+# ADPF priority boost (-1 = off by default)
+syswrite /proc/vendor_sched/boost_adpf_prio    -1
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 12. RT uclamp minimum
+#     Source: init.pixel-perf.rc  on init
+#     0 = RT tasks start at minimum utilisation (no implicit boost).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /proc/sys/kernel/sched_util_clamp_min_rt_default 0
+
+# uclamp_max filter tuning (enable flag is owned by nhpro-perf-toggle)
+syswrite /proc/vendor_sched/uclamp_max_filter_divider 4
+syswrite /proc/vendor_sched/uclamp_max_filter_rt      16
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 13. CPUSET groups for camera daemons
+#     Source: init.zuma.rc  on init
+#     These groups don't exist in a base Linux rootfs; create them.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+for grp in camera-daemon-high-group camera-daemon-mid-group camera-daemon-mid-high-group; do
+    d="/dev/cpuset/${grp}"
+    [ -d "$d" ] || mkdir -p "$d" 2>/dev/null || true
+    syswrite "${d}/cpus" "0-8"
+    syswrite "${d}/mems" "0"
+done
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 14. CPUSET final boot layout
+#     Source: init.zuma.rc  on sys.boot_completed=1
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /dev/cpuset/top-app/cpus           "0-8"
+syswrite /dev/cpuset/foreground/cpus        "0-7"
+syswrite /dev/cpuset/foreground_window/cpus "0-7"
+syswrite /dev/cpuset/background/cpus        "0-3"
+syswrite /dev/cpuset/system-background/cpus "0-3"
+syswrite /dev/cpuset/restricted/cpus        "0-3"
+syswrite /dev/cpuset/camera-daemon/cpus     "0-8"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 15. DRAM latency governor – memlat devfreq
+#     Source: init.zuma.rc  on init
+#
+#     Adjusts DRAM frequency in response to per-CPU memory-latency stalls.
+#     MMIO: gs_memlat_devfreq controller at 0x17000010 (MIF devfreq).
+#
+#     ratio_ceil / stall_floor per cluster:
+#       little cpu0-cpu3: ratio_ceil 1800, stall_floor 3000
+#       mid    cpu4-cpu7: ratio_ceil 3700, stall_floor 2400
+#       prime  cpu8:      ratio_ceil 3400, stall_floor  500
+# ═══════════════════════════════════════════════════════════════════════════════
+
+ML="/sys/class/devfreq/gs_memlat_devfreq:devfreq_mif_cpu"
+SFX="_memlat@17000010"
+
+for cpu in 0 1 2 3 4 5 6 7 8; do
+    b="${ML}${cpu}${SFX}"
+    syswrite "${b}/polling_interval"             10
+    syswrite "${b}/memlat_cpuidle_state_aware"   2
+done
+
+for cpu in 0 1 2 3; do
+    b="${ML}${cpu}${SFX}/mem_latency"
+    syswrite "${b}/ratio_ceil"  1800
+    syswrite "${b}/stall_floor" 3000
+done
+
+for cpu in 4 5 6 7; do
+    b="${ML}${cpu}${SFX}/mem_latency"
+    syswrite "${b}/ratio_ceil"  3700
+    syswrite "${b}/stall_floor" 2400
+done
+
+syswrite "${ML}8${SFX}/mem_latency/ratio_ceil"  3400
+syswrite "${ML}8${SFX}/mem_latency/stall_floor" 500
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 16. DSU latency governor – dsulat devfreq
+#     Source: init.zuma.rc  on init
+#     MMIO: gs_dsulat_devfreq controller at 0x17000090.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+DSU="/sys/class/devfreq/gs_dsulat_devfreq:devfreq_dsu_lat@17000090/dsu_latency"
+
+syswrite "${DSU}/ratio_ceil_cl0"                 700
+syswrite "${DSU}/ratio_ceil_cl1"                1000
+syswrite "${DSU}/ratio_ceil_cl2"                3000
+syswrite "${DSU}/mem_stall_floor_cl0"           1750
+syswrite "${DSU}/mem_stall_floor_cl1"           1750
+syswrite "${DSU}/mem_stall_floor_cl2"           1750
+syswrite "${DSU}/dsulat_cpuidle_state_aware_cl0"  2
+syswrite "${DSU}/dsulat_cpuidle_state_aware_cl1"  2
+syswrite "${DSU}/dsulat_cpuidle_state_aware_cl2"  2
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 17. MIF devfreq: cancel boot frequency boost
+#     Source: init.zuma.rc  on sys.boot_completed=1
+#     MMIO: 0x17000010.  Releases the elevated DRAM frequency held during boot.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /sys/devices/platform/17000010.devfreq_mif/devfreq/17000010.devfreq_mif/exynos_data/cancel_boot_freq 1
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 18. VM / memory tuning
+#     Source: init.zuma.rc  on init + sys.boot_completed=1
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /proc/sys/vm/page-cluster             0
+syswrite /proc/sys/vm/watermark_scale_factor   200
+syswrite /proc/sys/vm/dirty_expire_centisecs   3000
+syswrite /proc/sys/vm/dirty_background_ratio   10
+syswrite /sys/kernel/vendor_mm/kswapd_cpu_affinity    ff
+syswrite /sys/kernel/vendor_mm/kcompactd_cpu_affinity ff
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 19. Network socket buffer sizes
+#     Source: init.zuma.rc  on init
+#     Tuned for 5G NR / WiFi 6 throughput on the Shannon 5300 modem + SCSC WiFi.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /proc/sys/net/core/rmem_default        1310720
+syswrite /proc/sys/net/core/rmem_max            8388608
+syswrite /proc/sys/net/core/wmem_default        327680
+syswrite /proc/sys/net/core/wmem_max            8388608
+syswrite /proc/sys/net/core/optmem_max          20480
+syswrite /proc/sys/net/core/netdev_max_backlog  10000
+syswrite /proc/sys/net/ipv4/tcp_rmem            "2097152 4194304 8388608"
+syswrite /proc/sys/net/ipv4/tcp_wmem            "262144 524288 8388608"
+syswrite /proc/sys/net/ipv4/tcp_mem             "44259 59012 88518"
+syswrite /proc/sys/net/ipv4/udp_mem             "88518 118025 177036"
+
+# RPS (Receive Packet Steering) for Shannon 5300 modem rmnet interfaces.
+# Source: init.zuma.rc  on init
+# 0xfe = cpu1-cpu7 (all non-boot cpus); spread modem RX across mid/big cores.
+for iface in 0 1 2 3 4 5 6 7; do
+    syswrite "/sys/class/net/rmnet${iface}/queues/rx-0/rps_cpus" fe
+done
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 20. Storage: UFS block I/O scheduler
+#     Source: init.zuma.storage.rc  on init
+#     UFS controller MMIO: 0x13200000  (platform device 13200000.ufs)
+#     Block device: /dev/sda (first UFS LUN).
+#     mq-deadline: deadline I/O scheduler for the multi-queue UFS block layer.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /sys/block/sda/queue/scheduler mq-deadline
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 21. ZRAM: compression algorithm
+#     Source: init.zuma.rc  on init
+#     lzo-rle is the Google default on zuma; falls back silently if unavailable.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /sys/block/zram0/comp_algorithm lzo-rle
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 22. Power: suspend freeze timeout and async resume
+#     Source: init.power-gs.rc  on sys.boot_completed=1
+#             init.zuma.rc      on sys.boot_completed=1
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /sys/power/pm_freeze_timeout 1000
+
+# Mark critical-path platform devices as async-capable for suspend/resume.
+for p in \
+    /sys/devices/platform/fixedregulator@0/regulator/regulator.2/power/async \
+    /sys/devices/platform/fixedregulator@0/power/async \
+    /sys/devices/platform/26040000.clock-controller/power/async \
+    /sys/devices/platform/10840000.pinctrl/power/async \
+    /sys/devices/platform/13060000.pinctrl/power/async
+do
+    syswrite "$p" "enabled"
+done
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 23. Power: SICD (System Idle Clock Down)
+#     Source: init.zuma.rc  on sys.boot_completed=1
+#     Enables clock gating when all CPUs are idle – reduces leakage current.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /sys/devices/system/cpu/cpupm/cpupm/sicd 1
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 24. Thermal: TMU ACPM pi-table update + BCL (Battery Current Limiter)
+#     Source: init.zuma.rc  on boot  +  property:vendor.thermal.link_ready=1
+#
+#     BCL: write 0 then 1 to disable then re-enable CPU power-down per cluster.
+#     This resets the BCL state machine to a clean running state.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /sys/module/gs_thermal/parameters/update_acpm_pi_table 1
+
+syswrite /sys/devices/platform/cpupm/cpupm/cpd_cl1 0
+syswrite /sys/devices/platform/cpupm/cpupm/cpd_cl1 1
+syswrite /sys/devices/platform/cpupm/cpupm/cpd_cl2 0
+syswrite /sys/devices/platform/cpupm/cpupm/cpd_cl2 1
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 25. GPU: disable firmware log verbosity
+#     Source: init.zuma.rc  on sys.boot_completed=1
+#     Imagination PowerVR BXM-8-256 at MMIO 0x1f000000.
+#     Value 0 = no firmware log output (reduces noise / power).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite "/sys/devices/platform/1f000000.mali/firmware_config/Log verbosity/cur" 0
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 26. Kernel tracing: disabled by default
+#     Source: init.zuma.rc  on boot
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /sys/kernel/debug/tracing/tracing_on 0
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 27. ECD (External Co-Processor Display?) firmware load
+#     Source: init.zuma.rc  on fs
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /proc/ecd/load_firmware 1
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 28. USB: descriptor enumeration timeout + block events polling
+#     Source: init.zuma.usb.rc  on boot
+#     USB OTG controller MMIO: 0x11210000  (UDC: 11210000.dwc3)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /sys/module/usbcore/parameters/initial_descriptor_timeout 500
+syswrite /sys/module/block/parameters/events_dfl_poll_msecs        2000
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 29. Touch: default sensitivity mode (no screen protector)
+#     Source: init.husky.rc  property:persist.vendor.touch_sensitivity_mode=0
+#     0 = normal sensitivity (no screen protector).
+#     Touch GTI (Google Touch Interface) at virtual device gti.0.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+syswrite /sys/devices/virtual/goog_touch_interface/gti.0/screen_protector_mode_enabled 0
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 30. Sysfs ownership and permissions
+#     Source: init.zuma.rc  on fs / early-boot / boot
+#             init.husky.rc  on vendor.all.modules.ready=1
+#             init.zuma.rc   on property:vendor.device.modules.ready=1
+#
+#     Android ownership mapping → Linux:
+#       "system"      → root:root  (0644/0664 as appropriate)
+#       "audioserver" → root:audio
+#       "camera"      → root:video
+#       "bluetooth"   → root:bluetooth
+#       "gps"         → root:dialout
+#       "input"       → root:input
+#       "wifi"        → root:netdev
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# -- Display: backlight panel0-backlight (under exynos-drm) ------------------
+for attr in als_table brightness dimming_on hbm_mode local_hbm_mode \
+            allow_wakeup_by_state_change acl_mode; do
+    sysown "/sys/class/backlight/panel0-backlight/${attr}" root:video 0664
+done
+
+# -- Display: primary panel sysfs (exynos-drm platform device) ---------------
+for attr in gamma min_vrefresh idle_delay_ms panel_idle \
+            panel_need_handle_idle_exit op_hz refresh_ctrl power_state; do
+    sysown "/sys/devices/platform/exynos-drm/primary-panel/${attr}" root:video 0664
+done
+
+# -- Display: DECON controller (MMIO 0x19470000) ------------------------------
+sysown /sys/devices/platform/19470000.drmdecon/early_wakeup root:video 0660
+sysown /sys/devices/platform/19470000.drmdecon/hibernation  root:video 0644
+
+# -- Display: MIPI-DSI clocks (MMIO 0x19440000 / 0x19450000) -----------------
+sysown /sys/devices/platform/19440000.drmdsim/hs_clock root:video 0664
+sysown /sys/devices/platform/19450000.drmdsim/hs_clock root:video 0664
+
+# -- Display: DQE (Display Quality Enhancer) ATC nodes -----------------------
+for attr in ambient_light st en lt ns dither pl_w1 pl_w2 ctmode pp_en \
+            upgrade_on tdr_max tdr_min back_light dstep scale_mode \
+            threshold_1 threshold_2 threshold_3 gain_limit lt_calc_ab_shift; do
+    sysown "/sys/class/dqe0/atc/${attr}" root:video 0664
+done
+
+# -- Audio: Samsung ABOX DSP (MMIO 0x17c50000) --------------------------------
+for attr in reset service; do
+    sysown "/sys/devices/platform/17c50000.abox/${attr}" root:audio 0660
+done
+for attr in gpr calliope_sram calliope_dram calliope_iva; do
+    sysown "/sys/devices/platform/17c50000.abox/0.abox_debug/${attr}" root:audio 0660
+done
+
+# -- Audio: VTS (Voice Trigger Subsystem, MMIO 0x13810000) -------------------
+sysown /sys/devices/platform/13810000.vts/vts_svoice_model root:audio 0660
+sysown /sys/devices/platform/13810000.vts/vts_google_model root:audio 0660
+
+# -- Haptics: CS40L26 (I2C bus 0, address 0x43 → sysfs 0-0043) ---------------
+#    Source: init.husky.rc  on vendor.all.modules.ready=1
+for attr in \
+    calibration/f0_stored calibration/q_stored calibration/redc_stored \
+    default/vibe_state default/num_waves default/f0_offset \
+    default/owt_lib_compat default/owt_free_space \
+    default/braking_time_bank default/braking_time_index \
+    default/braking_time_ms default/f0_comp_enable \
+    default/redc_comp_enable default/delay_before_stop_playback_us
+do
+    sysown "/sys/bus/i2c/devices/0-0043/${attr}" root:audio 0660
+done
+
+# -- Touch: Google Touch Interface gti.0 (virtual device) --------------------
+#    Source: init.zuma.rc  on property:vendor.device.modules.ready=1
+for attr in force_active fw_ver ms_base ms_diff ms_raw self_test \
+            ss_base ss_diff ss_raw screen_protector_mode_enabled; do
+    sysown "/sys/devices/virtual/goog_touch_interface/gti.0/${attr}" root:input 0660
+done
+
+# -- Touch: Samsung SEC touchscreen (sec virtual class) ----------------------
+for attr in fw_version cmd cmd_result status; do
+    sysown "/sys/devices/virtual/sec/tsp/${attr}" root:input 0660
+done
+
+# -- Bluetooth: rfkill state (BT UART MMIO 0x175b0000) -----------------------
+#    Source: init.zuma.rc  on early-boot
+sysown /sys/devices/platform/175b0000.serial/serial0/serial0-0/bluetooth/hci0/rfkill0/state \
+    root:bluetooth 0660
+sysown /sys/devices/platform/odm/odm:btbcm/rfkill/rfkill0/state root:bluetooth 0660
+sysown /sys/devices/platform/odm/odm:btbcm/rfkill/rfkill2/state root:bluetooth 0660
+
+# -- GPS: SPI nstandby (MMIO 0x111e0000) -------------------------------------
+#    Source: init.zuma.rc  on post-fs-data
+sysown /sys/devices/platform/111e0000.spi/spi_master/spi21/spi21.0/nstandby \
+    root:dialout 0660
+
+# -- Security: GSA log (MMIO 0x16490000) -------------------------------------
+#    Source: init.zuma.rc  on init
+sysown /sys/devices/platform/16490000.gsa-ns/log_main         root:root 0440
+sysown /sys/devices/platform/16490000.gsa-ns/log_intermediate root:root 0440
+
+# -- PCIe link statistics (MMIO 0x12100000, 0x13120000) ----------------------
+#    Source: init.zuma.rc  on init
+for dev in 12100000.pcie 13120000.pcie; do
+    for stat in complete_timeout_irqs link_down_irqs \
+                link_recovery_failures link_up_failures; do
+        sysown "/sys/devices/platform/${dev}/link_stats/${stat}" root:root 0644
+    done
+done
+
+# -- Camera: flash torch -------------------------------------------------------
+sysown /sys/class/camera/flash/rear_torch_flash root:video 0660
+
+# -- Battery / charging: power-supply sysfs -----------------------------------
+for attr in charge_stats charge_deadline charging_policy \
+            first_usage_date swelling_data m5_model_state; do
+    sysown "/sys/class/power_supply/battery/${attr}"     root:root 0664
+    sysown "/sys/class/power_supply/maxfg/${attr}"       root:root 0664
+    sysown "/sys/class/power_supply/maxfg_base/${attr}"  root:root 0664
+done
+for attr in capacity rtx rxdata txdata rxlen txlen ccreset status version \
+            features authtype authstart charge_stats; do
+    sysown "/sys/class/power_supply/wireless/device/${attr}" root:root 0664
+done
+sysown /sys/class/power_supply/wireless/capacity root:root 0664
+
+# -- Battery: EEPROM (I2C 0x10c90000 → i2c-9, address 0x50) -----------------
+sysown /sys/devices/platform/10c90000.hsi2c/i2c-9/9-0050/eeprom root:root 0644

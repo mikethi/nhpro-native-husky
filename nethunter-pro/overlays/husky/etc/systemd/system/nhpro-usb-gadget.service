@@ -1,0 +1,19 @@
+[Unit]
+Description=NHPro USB gadget setup – configfs (husky / 11210000.dwc3)
+Documentation=https://github.com/mikethi/nhpro-native-husky
+# Source: init.zuma.usb.rc  on early-boot
+# Direct configfs USB gadget control.  No usbd HAL, no android.hardware.usb.gadget.
+# UDC: 11210000.dwc3  (DWC3 SuperSpeed OTG, MMIO 0x11210000)
+# Default mode: NCM (USB Ethernet) for SSH-over-USB access.
+After=systemd-modules-load.service
+Before=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/nhpro-usb-gadget
+# Tear down the gadget cleanly on stop.
+ExecStop=/bin/sh -c 'printf none > /config/usb_gadget/g1/UDC 2>/dev/null || true'
+
+[Install]
+WantedBy=multi-user.target
