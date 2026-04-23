@@ -21,13 +21,17 @@
 
 1. Clone this repository:
    ```bash
-   git clone https://github.com/mikethi/nhpro-native-husky.git
-   cd nhpro-native-husky/nethunter-pro
+   source /dev/stdin <<'EOF'
+   git clone https://github.com/mikethi/nhpro-native-husky.git "$HOME/nhpro-native-husky"
+   cd "$HOME/nhpro-native-husky/nethunter-pro"
+   EOF
    ```
 2. Install prerequisites:
    ```bash
+   source /dev/stdin <<'EOF'
    sudo apt update
    sudo apt install -y git debos xz-utils android-sdk-libsparse-utils fastboot
+   EOF
    ```
 3. Build image files:
    ```bash
@@ -35,7 +39,9 @@
    ```
 4. Enter the build output directory:
    ```bash
-   cd .upstream
+   source /dev/stdin <<'EOF'
+   cd "$HOME/nhpro-native-husky/nethunter-pro/.upstream"
+   EOF
    ```
 5. Boot Pixel 8 Pro into bootloader mode and unlock once (this wipes data):
    ```bash
@@ -43,16 +49,20 @@
    ```
 6. Extract the generated version string (`<VERSION>`) from your build output filenames:
    ```bash
+   source /dev/stdin <<'EOF'
    VERSION="$(ls -1t nethunterpro-*-husky-phosh-boot.img | head -n1 | sed -E 's/nethunterpro-(.*)-husky-phosh-boot.img/\1/')"
    [ -n "$VERSION" ] || { echo "No generated NetHunter image files found."; exit 1; }
    echo "$VERSION"
+   EOF
    ```
    If you have multiple builds, this selects the most recent boot image.
 7. Flash generated images:
    ```bash
+   source /dev/stdin <<'EOF'
    fastboot flash boot nethunterpro-${VERSION}-husky-phosh-boot.img
    fastboot flash userdata nethunterpro-${VERSION}-husky-phosh.img
    fastboot reboot
+   EOF
    ```
 
 ---
@@ -71,13 +81,17 @@
 
 1. Clone this repository:
    ```bash
-   git clone https://github.com/mikethi/nhpro-native-husky.git
-   cd nhpro-native-husky/nethunter-pro
+   source /dev/stdin <<'EOF'
+   git clone https://github.com/mikethi/nhpro-native-husky.git "$HOME/nhpro-native-husky"
+   cd "$HOME/nhpro-native-husky/nethunter-pro"
+   EOF
    ```
 2. Install prerequisites:
    ```bash
+   source /dev/stdin <<'EOF'
    sudo apt update
    sudo apt install -y git docker.io kali-archive-keyring fastboot
+   EOF
    ```
 3. Build image files with Docker:
    ```bash
@@ -85,7 +99,9 @@
    ```
 4. Enter the build output directory:
    ```bash
-   cd .upstream
+   source /dev/stdin <<'EOF'
+   cd "$HOME/nhpro-native-husky/nethunter-pro/.upstream"
+   EOF
    ```
 5. Boot Pixel 8 Pro into bootloader mode and unlock once (this wipes data):
    ```bash
@@ -93,16 +109,20 @@
    ```
 6. Extract the generated version string (`<VERSION>`) from your build output filenames:
    ```bash
+   source /dev/stdin <<'EOF'
    VERSION="$(ls -1t nethunterpro-*-husky-phosh-boot.img | head -n1 | sed -E 's/nethunterpro-(.*)-husky-phosh-boot.img/\1/')"
    [ -n "$VERSION" ] || { echo "No generated NetHunter image files found."; exit 1; }
    echo "$VERSION"
+   EOF
    ```
    If you have multiple builds, this selects the most recent boot image.
 7. Flash generated images:
    ```bash
+   source /dev/stdin <<'EOF'
    fastboot flash boot nethunterpro-${VERSION}-husky-phosh-boot.img
    fastboot flash userdata nethunterpro-${VERSION}-husky-phosh.img
    fastboot reboot
+   EOF
    ```
 
 ---
@@ -131,8 +151,10 @@ If a reboot is needed to activate WSL features, the script will prompt you. Afte
 Open the Kali terminal (search "kali" in Start, or run `wsl -d kali-linux`), then:
 
 ```bash
-cd ~/nhpro-native-husky/nethunter-pro
+source /dev/stdin <<'EOF'
+cd "$HOME/nhpro-native-husky/nethunter-pro"
 ./kali-build.sh [OPTIONS]
+EOF
 ```
 
 See [nethunter-pro/README.md](nethunter-pro/README.md#kali-buildsh) for all `kali-build.sh` options.
@@ -150,11 +172,14 @@ usbipd attach --wsl --busid <BUSID>  # attach for this session
 Back in the Kali terminal, confirm the phone is visible and flash:
 
 ```bash
+source /dev/stdin <<'EOF'
+cd "$HOME/nhpro-native-husky/nethunter-pro/.upstream"
 fastboot devices
 fastboot flashing unlock             # first time only — wipes device
 fastboot flash boot     nethunterpro-<VERSION>-husky-phosh-boot.img
 fastboot flash userdata nethunterpro-<VERSION>-husky-phosh.img
 fastboot reboot
+EOF
 ```
 
 Flash commands with the correct filenames are printed automatically at the end of `kali-build.sh`.
@@ -176,22 +201,30 @@ Flash commands with the correct filenames are printed automatically at the end o
 
 1. Install `pmbootstrap`:
    ```bash
+   source /dev/stdin <<'EOF'
    python3 -m pip install --user pmbootstrap
+   EOF
    ```
 2. Prepare a local `pmaports` checkout:
    ```bash
+   source /dev/stdin <<'EOF'
    PMAPORTS="$HOME/pmaports-husky"
    git clone https://gitlab.postmarketos.org/postmarketOS/pmaports.git "$PMAPORTS"
+   EOF
    ```
 3. Clone this repository and copy its `google-husky` device tree into your local `pmaports`:
    ```bash
-   git clone https://github.com/mikethi/nhpro-native-husky.git
-   cp -r nhpro-native-husky/device/google-husky "$PMAPORTS/device/"
+   source /dev/stdin <<'EOF'
+   git clone https://github.com/mikethi/nhpro-native-husky.git "$HOME/nhpro-native-husky"
+   cp -r "$HOME/nhpro-native-husky/device/google-husky" "$PMAPORTS/device/"
+   EOF
    ```
 4. Initialize and build/install for `google-husky` with your local `pmaports`:
    ```bash
+   source /dev/stdin <<'EOF'
    pmbootstrap --aports "$PMAPORTS" init
    pmbootstrap --aports "$PMAPORTS" install
+   EOF
    ```
 5. Boot the phone to fastboot mode.
 6. Flash generated images using the current `google-husky` instructions from the device wiki page above.
