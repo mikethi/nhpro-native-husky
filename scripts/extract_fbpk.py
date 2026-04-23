@@ -4,7 +4,16 @@
 FBPK v2 is the proprietary container format used by Google Pixel (Tensor / zuma)
 factory firmware ZIPs for the Android Bootloader (ABL) partition image.
 
-Container layout (from algorythm.txt in the kali-nethunter-pro bootloader repo):
+Reference image (abl.bin – ABL payload extracted from the FBPK v2 container):
+    https://raw.githubusercontent.com/mikethi/zuma-husky-homebootloader/main/abl.bin
+
+Full bootloader image (FBPK v2 container):
+    https://raw.githubusercontent.com/mikethi/zuma-husky-homebootloader/main/bootloader-husky-ripcurrent-16.4-14540574.img
+
+Format specification:
+    https://github.com/mikethi/zuma-husky-homebootloader/blob/main/ALGORITHM.txt
+
+Container layout (from ALGORITHM.txt in the zuma-husky-homebootloader repo):
 
   CONTAINER HEADER  (0x68 bytes at offset 0x00)
   ┌──────────┬──────┬──────────────────────────────────────────────────────┐
@@ -248,13 +257,18 @@ def validate_entry_bounds(entry: FbpkEntry, file_size: int) -> str | None:
 
 # ── Extraction ────────────────────────────────────────────────────────────────
 
-def extract_entry(data: bytes, entry: FbpkEntry, output_dir: Path) -> Path:
-    """Write an entry's payload to *output_dir* and return the output path."""
-    safe = _sanitize_name(entry.name)
-    out_path = output_dir / safe
-    # Avoid clobbering duplicate names by appending the entry index.
-    if out_path.exists():
-        out_path = output_dir / f"{safe}.{entry.index}"
+def extract_entry(data: bytes, entry: FbpkEntry, output_dir: Path, seen_names: dict[str, int]) -> Path:
+    """Write an entry's payload to *output_dir* and return the output path.
+
+    Output filenames follow ALGORITHM.txt step 4e: ``<name>.bin``.
+    Duplicate names (e.g. ``ufs`` appears twice) get a ``_N`` counter suffix:
+    ``ufs.bin``, ``ufs_1.bin``, ``ufs_2.bin``, …
+    """
+    count = seen_names.get(entry.name, 0)
+    seen_names[entry.name] = count + 1
+    base = entry.name if count == 0 else f"{entry.name}_{count}"
+    safe = _sanitize_name(base)
+    out_path = output_dir / f"{safe}.bin"
     payload = data[entry.data_offset: entry.data_offset + entry.data_size]
     out_path.write_bytes(payload)
     return out_path
@@ -270,6 +284,7 @@ def extract_all(
     """Extract all entries with payloads to *output_dir*; return a result list."""
     output_dir.mkdir(parents=True, exist_ok=True)
     results: list[dict[str, object]] = []
+    seen_names: dict[str, int] = {}
     for entry in entries:
         rec: dict[str, object] = entry.to_dict()
         if not entry.has_payload:
@@ -287,7 +302,7 @@ def extract_all(
             print(f"  [!] {bounds_error}", file=sys.stderr)
             continue
 
-        out_path = extract_entry(data, entry, output_dir)
+        out_path = extract_entry(data, entry, output_dir, seen_names)
         rec["status"] = "extracted"
         rec["output_file"] = str(out_path)
         results.append(rec)
