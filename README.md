@@ -1,25 +1,33 @@
-# pmos-google-nativehusky
+# nhpro-native-husky
 
-**Google Pixel 8 Pro (husky) — postmarketOS & Kali NetHunter, full native kernel hardware control (no HAL)**
+**Google Pixel 8 Pro (husky) — postmarketOS & Kali NetHunter Pro, full native kernel hardware control (no HAL)**
 
 → **[HARDWARE_SPECS.md](HARDWARE_SPECS.md)** — complete hardware table: every component on the Pixel 8 Pro with its driver module name, kernel interface, Sultan kernel source link, firmware path, and mainline kernel equivalent.
 
 ## Installation guide (step by step)
 
-### Installation type A: Kali NetHunter Pro build on bare metal (Kali/Debian host)
+### Installation options
+
+- **A: Kali/Debian bare metal build** → use `./build.sh`
+- **B: Docker build** → use `./build.sh -d`
+- **C: Windows 10 automated setup (PowerShell 7 + WSL2 + Kali)** → use `scripts/setup-wsl-kali.ps1` + `./kali-build.sh`
+- **D: postmarketOS (pmbootstrap workflow)** → use `device/google-husky/`
+
+For all NetHunter Pro build options and flags, see: [nethunter-pro/README.md](nethunter-pro/README.md)
+
+### Installation type A/B: Kali NetHunter Pro (Linux host)
 
 #### Prerequisites
 
 - Git: <https://git-scm.com/downloads>
-- debos: <https://github.com/go-debos/debos>
-- xz-utils: <https://tukaani.org/xz/>
-- Android sparse/boot tooling package (`android-sdk-libsparse-utils`): <https://packages.debian.org/search?keywords=android-sdk-libsparse-utils>
 - Android Fastboot (`fastboot`): <https://developer.android.com/tools/releases/platform-tools>
 - NetHunter Pro build files in this repo: [nethunter-pro/README.md](nethunter-pro/README.md)
+- For **A (bare metal)**: `debos`, `xz-utils`, `android-sdk-libsparse-utils`
+- For **B (Docker)**: Docker Engine (<https://docs.docker.com/engine/install/>) and `kali-archive-keyring`
 
 #### Steps
 
-1. Clone this repository:
+1. Clone this repository and enter the NetHunter build directory:
    ```bash
    source /dev/stdin <<'EOF'
    NHPRO_ROOT="${NHPRO_ROOT:-$PWD/nhpro-native-husky}"
@@ -28,97 +36,33 @@
    EOF
    ```
 2. Install prerequisites:
-   ```bash
-   source /dev/stdin <<'EOF'
-   sudo apt update
-   sudo apt install -y git debos xz-utils android-sdk-libsparse-utils fastboot
-   EOF
-   ```
-3. Build image files:
-   ```bash
-   ./build.sh
-   ```
-4. Enter the build output directory:
+   - **A (bare metal)**:
+     ```bash
+     sudo apt update
+     sudo apt install -y git debos xz-utils android-sdk-libsparse-utils fastboot
+     ```
+   - **B (Docker)**:
+     ```bash
+     sudo apt update
+     sudo apt install -y git docker.io kali-archive-keyring fastboot
+     ```
+3. Build images:
+   - **A (bare metal)**: `./build.sh`
+   - **B (Docker)**: `./build.sh -d`
+4. Enter the output directory and extract `<VERSION>`:
    ```bash
    source /dev/stdin <<'EOF'
    cd "$NHPRO_ROOT/nethunter-pro/.upstream"
-   EOF
-   ```
-5. Boot Pixel 8 Pro into bootloader mode and unlock once (this wipes data):
-   ```bash
-   fastboot flashing unlock
-   ```
-6. Extract the generated version string (`<VERSION>`) from your build output filenames:
-   ```bash
-   source /dev/stdin <<'EOF'
    VERSION="$(ls -1t nethunterpro-*-husky-phosh-boot.img | head -n1 | sed -E 's/nethunterpro-(.*)-husky-phosh-boot.img/\1/')"
    [ -n "$VERSION" ] || { echo "No generated NetHunter image files found."; exit 1; }
    echo "$VERSION"
    EOF
    ```
-   If you have multiple builds, this selects the most recent boot image.
-7. Flash generated images:
-   ```bash
-   source /dev/stdin <<'EOF'
-   fastboot flash boot nethunterpro-${VERSION}-husky-phosh-boot.img
-   fastboot flash userdata nethunterpro-${VERSION}-husky-phosh.img
-   fastboot reboot
-   EOF
-   ```
-
----
-
-### Installation type B: Kali NetHunter Pro build with Docker
-
-#### Prerequisites
-
-- Git: <https://git-scm.com/downloads>
-- Docker Engine: <https://docs.docker.com/engine/install/>
-- Kali archive keyring package (`kali-archive-keyring`): <https://packages.debian.org/search?keywords=kali-archive-keyring>
-- Android Fastboot (`fastboot`): <https://developer.android.com/tools/releases/platform-tools>
-- NetHunter Pro build files in this repo: [nethunter-pro/README.md](nethunter-pro/README.md)
-
-#### Steps
-
-1. Clone this repository:
-   ```bash
-   source /dev/stdin <<'EOF'
-   NHPRO_ROOT="${NHPRO_ROOT:-$PWD/nhpro-native-husky}"
-   git clone https://github.com/mikethi/nhpro-native-husky.git "$NHPRO_ROOT"
-   cd "$NHPRO_ROOT/nethunter-pro"
-   EOF
-   ```
-2. Install prerequisites:
-   ```bash
-   source /dev/stdin <<'EOF'
-   sudo apt update
-   sudo apt install -y git docker.io kali-archive-keyring fastboot
-   EOF
-   ```
-3. Build image files with Docker:
-   ```bash
-   ./build.sh -d
-   ```
-4. Enter the build output directory:
-   ```bash
-   source /dev/stdin <<'EOF'
-   cd "$NHPRO_ROOT/nethunter-pro/.upstream"
-   EOF
-   ```
-5. Boot Pixel 8 Pro into bootloader mode and unlock once (this wipes data):
+5. Put the phone in bootloader mode and unlock once (this wipes data):
    ```bash
    fastboot flashing unlock
    ```
-6. Extract the generated version string (`<VERSION>`) from your build output filenames:
-   ```bash
-   source /dev/stdin <<'EOF'
-   VERSION="$(ls -1t nethunterpro-*-husky-phosh-boot.img | head -n1 | sed -E 's/nethunterpro-(.*)-husky-phosh-boot.img/\1/')"
-   [ -n "$VERSION" ] || { echo "No generated NetHunter image files found."; exit 1; }
-   echo "$VERSION"
-   EOF
-   ```
-   If you have multiple builds, this selects the most recent boot image.
-7. Flash generated images:
+6. Flash generated images:
    ```bash
    source /dev/stdin <<'EOF'
    fastboot flash boot nethunterpro-${VERSION}-husky-phosh-boot.img
@@ -265,7 +209,7 @@ python3 scripts/create_fetched_sources_repo.py --dry-run --force
 
 A GitHub Actions workflow (`Repository Bundle Zip`) also uploads the same zip as a downloadable artifact on pushes and manual runs:
 
-- https://github.com/mikethi/pmos-google-nativehusky/actions/workflows/repo-bundle.yml
+- https://github.com/mikethi/nhpro-native-husky/actions/workflows/repo-bundle.yml
 
 ## License requirements for bundled content
 
