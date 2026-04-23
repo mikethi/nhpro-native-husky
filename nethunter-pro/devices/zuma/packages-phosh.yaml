@@ -91,4 +91,4 @@ actions:
   - action: run
     description: Enable modem firmware FUSE mount (Shannon 5300, modem_a/b)
     chroot: true
-    command: systemctl enable firmware-modem.mount
+    command: systemctl enable firmware-modem.service

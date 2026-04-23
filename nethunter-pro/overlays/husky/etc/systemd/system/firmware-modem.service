@@ -6,8 +6,8 @@ Documentation=https://github.com/mikethi/nhpro-native-husky
 #
 # The Samsung Shannon 5300 modem firmware is stored on the modem_a/modem_b
 # UFS partition (MMIO 0x13200000, platform device 13200000.ufs).
-# The nhpro-modem-mount helper detects the active A/B slot from /proc/cmdline
-# and FUSE-mounts the correct ext4 partition at /firmware/modem using fuse2fs.
+# nhpro-modem-mount detects the active A/B slot from /proc/cmdline and
+# FUSE-mounts the ext4 partition at /firmware/modem via fuse2fs.
 #
 # ModemManager and the cpif/modem_if kernel driver read modem firmware from
 # /firmware/modem after this unit is active.
@@ -16,11 +16,11 @@ Before=ModemManager.service
 Wants=ModemManager.service
 
 [Service]
-Type=forking
+Type=oneshot
+RemainAfterExit=yes
 ExecStartPre=/bin/mkdir -p /firmware/modem
 ExecStart=/usr/local/bin/nhpro-modem-mount
 ExecStop=/bin/umount /firmware/modem
-RemainAfterExit=yes
 Restart=on-failure
 RestartSec=5
 
