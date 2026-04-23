@@ -135,6 +135,34 @@ fastboot reboot
 
 Default credentials: **kali / 1234**
 
+### Flash option: U-Boot secondary bootloader (Experimental)
+
+> **⚠ WARRANTY VOID — ADVANCED USERS ONLY.**
+> U-Boot is placed in the `boot` partition (as the kernel payload loaded by Google ABL).
+> The `bootloader` partition is hardware-locked by Titan M2 and **cannot** be replaced.
+> The zuma SoC has **no upstream U-Boot support** yet; the config files in this repo are a research/porting base.
+> See the [full U-Boot section in the root README](../README.md#️⚠️️-u-boot-secondary-bootloader-experimental-️⚠️️) for complete build, wrap, and flash instructions for all install types (A/B/C/D).
+
+Quick reference — after building `uboot-husky-boot.img` per the root README:
+
+```bash
+# 1. Unlock (one-time — wipes data)
+fastboot flashing unlock
+
+# 2. Flash U-Boot to boot partition (replaces NetHunter Pro / Android kernel)
+fastboot flash boot uboot-husky-boot.img
+
+# 3. Optionally keep the NetHunter Pro rootfs on userdata for U-Boot to chainload
+fastboot flash userdata nethunterpro-<VERSION>-husky-phosh.img
+
+# 4. Reboot — U-Boot prompt appears on UART (ttySAC0, 115200 8N1); screen stays black
+fastboot reboot
+
+# To revert to NetHunter Pro at any time:
+fastboot flash boot nethunterpro-<VERSION>-husky-phosh-boot.img
+fastboot reboot
+```
+
 ## Device details
 
 | Field | Value |
