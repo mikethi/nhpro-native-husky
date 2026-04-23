@@ -1,0 +1,47 @@
+# Google Pixel 8 Pro (husky) — U-Boot defconfig
+#
+# SoC: Google Tensor G3 (zuma / Samsung GS301, Exynos-derived)
+#
+# Values are sourced from the factory FBPK v2 bootloader image
+# (bootloader-husky-ripcurrent-16.4-14540574.img).  See:
+#   scripts/extract_fbpk.py  — container extractor
+#   scripts/parse_abl.py     — ABL string analyser
+#   nethunter-pro/devices/zuma/configs/uboot/husky.h  — board include
+#
+# ── Architecture ──────────────────────────────────────────────────────────
+CONFIG_ARM=y
+CONFIG_ARCH_EXYNOS=y		# Tensor G3 is Samsung Exynos-derived, not Qualcomm
+
+# ── Memory layout ─────────────────────────────────────────────────────────
+# CONFIG_SYS_TEXT_BASE: identified in bl2.bin as the staging base used
+# before kernel hand-off (above the secure DRAM carve-out at 0x92800000).
+CONFIG_SYS_TEXT_BASE=0xA0800000
+CONFIG_SYS_MALLOC_LEN=0x2000000	# 32 MB heap — same ballpark as SDM845 ports
+# CONFIG_SYS_LOAD_ADDR: arm64 TEXT_OFFSET (0x80000 above DRAM base).
+# Matches the kernel load address format string in abl.bin.
+CONFIG_SYS_LOAD_ADDR=0x80080000
+CONFIG_SYS_BOOTM_LEN=0x4000000
+CONFIG_NR_DRAM_BANKS=2		# bank-0 @ 0x80000000, bank-1 @ 0x880000000
+
+# ── Board identity ─────────────────────────────────────────────────────────
+# Matches the version string embedded in abl.bin: "ripcurrent-16.4-14540574"
+CONFIG_IDENT_STRING=" husky-zuma-ripcurrent"
+
+# ── Fastboot / USB gadget ──────────────────────────────────────────────────
+CONFIG_CMD_FASTBOOT=y
+CONFIG_USB_GADGET=y
+# VID confirmed in abl.bin at offset 0x30158 (Google = 0x18D1)
+CONFIG_USB_GADGET_VENDOR_NUM=0x18D1
+# PID confirmed in abl.bin at offset 0x88422 (fastboot = 0x4EE7)
+CONFIG_USB_GADGET_PRODUCT_NUM=0x4EE7
+
+# ── Android boot image support ─────────────────────────────────────────────
+CONFIG_ANDROID_BOOT_IMAGE=y
+CONFIG_CMD_ABOOTIMG=y
+CONFIG_ANDROID_AB=y		# husky uses A/B partition scheme
+
+# ── Storage ────────────────────────────────────────────────────────────────
+CONFIG_MMC_HS400_ES=y
+# UFS host controller at 0x13200000 (from fstab.husky:
+#   /dev/block/platform/13200000.ufs)
+CONFIG_DM_SCSI=y
