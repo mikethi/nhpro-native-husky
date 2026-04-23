@@ -1,83 +1,48 @@
 #!/bin/sh
-# boot-targets/android.sh – Android kexec boot target
+# boot-targets/android.sh — Android kexec boot target (active slot, auto A/B)
 # Google Pixel 8 Pro (husky / zuma)
 #
-# Loads an Android kernel from /userdata/.android/ and kexecs into it.
-# Falls back to the linux target if any step fails.
+# Boots Android on the A/B slot reported by the ABL-injected
+# androidboot.slot_suffix=_a|_b in /proc/cmdline.
+# For an explicit slot use android-a.sh or android-b.sh.
 #
-# Required files on userdata (place with scripts/set-target.sh):
-#   /userdata/.android/kernel    Android kernel image (Image.gz-dtb or Image.gz)
-#   /userdata/.android/initrd    Android vendor_ramdisk / initrd  (optional)
-#   /userdata/.android/cmdline   Kernel command line, one line     (optional)
+# Userdata store: /userdata/.android/
 #
-# Default cmdline (used when /userdata/.android/cmdline is absent):
-#   earlycon=exynos4210,mmio32,0x10870000 console=ttySAC0,115200n8
-#   clk_ignore_unused swiotlb=noforce androidboot.hardware=zuma
+# ── dm-verity ────────────────────────────────────────────────────────────────
+# On an unlocked device the ABL injects:
+#   androidboot.verifiedbootstate=orange   → dm-verity relaxed
+#   androidboot.vbmeta.device_state=unlocked → AVB enforcement skipped
+# Both are inherited from /proc/cmdline and forwarded to the Android kernel.
+# Android shows an orange warning screen for a few seconds, then boots.
 #
-# Requires: kexec (static arm64 binary embedded in the initrd by build.sh)
+# To fully disable dm-verity (no warning screen):
+#   fastboot flash vbmeta --disable-verity --disable-verification vbmeta.img
+#   (scripts/setup-android.sh handles this automatically)
+#
+# ── Anti-Rollback Protection (ARP) ──────────────────────────────────────────
+# ARP is enforced by the ABL on the bootloader partition (Titan M2-locked).
+# When kexec-booting Android, ARP is NOT re-evaluated — the ABL already ran.
+# Ensure your Android system/vendor images match your ABL version to avoid
+# boot loops after an ABL update.  Never downgrade the ABL.
+#
+# ── Magisk ───────────────────────────────────────────────────────────────────
+# If the stored kernel was patched with Magisk (scripts/patch-magisk.sh or
+# via the U-Boot Magisk patch mode), Android boots with root access.
+# Magisk's own dm-verity and forceencrypt handling is applied automatically.
+#
+# ── Setup ────────────────────────────────────────────────────────────────────
+# Populate the store with:
+#   ./addons/boot-selector/scripts/setup-android.sh --factory-zip <zip>
+# Or manually:
+#   ./addons/boot-selector/scripts/set-target.sh store-android \
+#       --kernel android-kernel.img --initrd android-vendor_boot.img
 
 ANDROID_STORE=".android"
 
-# ── locate userdata block device by GPT partition label ──────────────────────
-_find_userdata() {
-    for dev in /dev/sda* /dev/nvme0n1p* /dev/mmcblk0p*; do
-        [ -b "$dev" ] || continue
-        label="$(blkid -o value -s PARTLABEL "$dev" 2>/dev/null)" || continue
-        [ "$label" = "userdata" ] && echo "$dev" && return 0
-    done
-    return 1
-}
-
-_fallback_linux() {
-    echo "boot-selector[android]: falling back to linux" >/dev/console
-    # shellcheck disable=SC1091
-    . /boot-targets/linux.sh
-    run_target
-}
-
 run_target() {
-    echo "boot-selector[android]: locating userdata partition" >/dev/console
-
-    USERDATA_DEV="$(_find_userdata 2>/dev/null)" || {
-        echo "boot-selector[android]: userdata not found" >/dev/console
-        _fallback_linux; return
-    }
-
-    mkdir -p /run/boot-selector/mnt
-    mount -t ext4 -o ro "$USERDATA_DEV" /run/boot-selector/mnt 2>/dev/null || {
-        echo "boot-selector[android]: cannot mount userdata (${USERDATA_DEV})" >/dev/console
-        _fallback_linux; return
-    }
-
-    STORE="/run/boot-selector/mnt/${ANDROID_STORE}"
-
-    if [ ! -f "${STORE}/kernel" ]; then
-        echo "boot-selector[android]: no kernel at ${STORE}/kernel" >/dev/console
-        umount /run/boot-selector/mnt 2>/dev/null || true
-        _fallback_linux; return
-    fi
-
-    # Copy files out before unmounting
-    cp "${STORE}/kernel" /tmp/android-kernel
-    [ -f "${STORE}/initrd"  ] && cp "${STORE}/initrd"  /tmp/android-initrd
-    CMDLINE="$(cat "${STORE}/cmdline" 2>/dev/null || \
-        printf '%s' "earlycon=exynos4210,mmio32,0x10870000 console=ttySAC0,115200n8 clk_ignore_unused swiotlb=noforce androidboot.hardware=zuma")"
-
-    umount /run/boot-selector/mnt 2>/dev/null || true
-
-    echo "boot-selector[android]: loading kernel via kexec" >/dev/console
-
-    if [ -f /tmp/android-initrd ]; then
-        kexec -l /tmp/android-kernel \
-              --initrd=/tmp/android-initrd \
-              --append="$CMDLINE"
-    else
-        kexec -l /tmp/android-kernel \
-              --append="$CMDLINE"
-    fi
-
-    kexec -e
-    # kexec -e does not return on success; reaching here means it failed
-    echo "boot-selector[android]: kexec failed" >/dev/console
-    _fallback_linux
+    echo "boot-selector[android]: starting (active slot, auto A/B)" \
+         >/dev/console
+    local cmdline
+    cmdline="$(_build_android_cmdline "" "")"
+    _kexec_boot "$ANDROID_STORE" "$cmdline" || _fallback_linux
 }

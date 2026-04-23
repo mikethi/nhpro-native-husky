@@ -3,14 +3,20 @@
 # Google Pixel 8 Pro (husky / zuma SoC)
 #
 # This script runs as the very first process after the kernel loads the
-# selector initrd.  It reads a boot target, dispatches to the matching
-# handler in /boot-targets/, then either:
+# selector initrd.  It sources shared helpers, reads a boot target, dispatches
+# to the matching handler in /boot-targets/, then either:
 #
-#   linux    – extracts the embedded real initrd over the current tmpfs
-#              and execs its /init (NetHunter Pro default)
-#   android  – kexecs to the Android kernel stored on userdata
-#   recovery – kexecs to the Android recovery kernel stored on userdata
-#   <custom> – any /boot-targets/<name>.sh you add is picked up automatically
+#   linux      – extracts the embedded real initrd and execs its /init
+#   android    – kexecs to Android on the active slot
+#   android-a  – kexecs to Android slot_a explicitly
+#   android-b  – kexecs to Android slot_b explicitly
+#   gsi        – kexecs to Android GSI (system_a replaced by GSI image)
+#   recovery   – kexecs to Android Recovery on the active slot
+#   recovery-a – kexecs to Android Recovery slot_a explicitly
+#   recovery-b – kexecs to Android Recovery slot_b explicitly
+#   menu       – shows interactive ASCII boot menu with countdown
+#   magisk-patch – Magisk patch mode (patches a stored kernel, then reboots)
+#   <custom>   – any /boot-targets/<name>.sh you add is picked up automatically
 #
 # Boot target priority (first non-empty wins):
 #   1. Kernel cmdline parameter:  boot_target=<name>
@@ -19,14 +25,14 @@
 #
 # Hardware notes (husky):
 #   Console : ttySAC0 @ 0x10870000, 115200n8  (Exynos UART0)
-#   Storage : UFS 3.1 via exynos-ufs → /dev/sda  (GPT, userdata label "userdata")
+#   Storage : UFS 3.1 via exynos-ufs → /dev/sda  (GPT, userdata = "userdata")
 #   Boot    : Android header v4, A/B scheme, no SD card
 
 set -e
 
 CONSOLE=/dev/console
 
-# ── mount kernel filesystems ────────────────────────────────────────────────
+# ── mount kernel filesystems ─────────────────────────────────────────────────
 mount -t proc     proc     /proc
 mount -t sysfs    sysfs    /sys
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || {
@@ -48,10 +54,17 @@ exec 0<$CONSOLE 1>$CONSOLE 2>$CONSOLE
 
 echo "boot-selector: starting" >$CONSOLE
 
-# ── read boot target ─────────────────────────────────────────────────────────
+# ── load shared helpers ───────────────────────────────────────────────────────
+# _common.sh provides: _find_userdata, _android_inherited_params,
+# _build_android_cmdline, _set_slot_suffix, _set_boot_mode,
+# _kexec_boot, _fallback_linux
+# shellcheck disable=SC1091
+. /boot-targets/_common.sh
+
+# ── read boot target ──────────────────────────────────────────────────────────
 BOOT_TARGET=""
 
-# Priority 1: kernel cmdline  (fastboot boot -c "boot_target=android" ...)
+# Priority 1: kernel cmdline  (fastboot boot -c "boot_target=android-a" ...)
 for arg in $(cat /proc/cmdline); do
     case "$arg" in
         boot_target=*) BOOT_TARGET="${arg#boot_target=}" ;;
@@ -61,9 +74,6 @@ done
 # Priority 2: flag file on userdata  (/userdata/.boot_target)
 if [ -z "$BOOT_TARGET" ]; then
     USERDATA_DEV=""
-    # Scan GPT partitions for the "userdata" label.
-    # On husky the UFS block device is /dev/sda; the userdata partition is
-    # typically /dev/sda15 or nearby but the label is the stable identifier.
     for dev in /dev/sda* /dev/nvme0n1p* /dev/mmcblk0p*; do
         [ -b "$dev" ] || continue
         label="$(blkid -o value -s PARTLABEL "$dev" 2>/dev/null)" || continue
@@ -75,10 +85,18 @@ if [ -z "$BOOT_TARGET" ]; then
 
     if [ -n "$USERDATA_DEV" ]; then
         mkdir -p /run/boot-selector/mnt
-        if mount -t ext4 -o ro "$USERDATA_DEV" /run/boot-selector/mnt 2>/dev/null; then
+        mounted=""
+        mount -t f2fs -o ro "$USERDATA_DEV" /run/boot-selector/mnt \
+              2>/dev/null && mounted=1 || true
+        [ -z "$mounted" ] && \
+            mount -t ext4 -o ro "$USERDATA_DEV" /run/boot-selector/mnt \
+                  2>/dev/null && mounted=1 || true
+        if [ -n "$mounted" ]; then
             if [ -f /run/boot-selector/mnt/.boot_target ]; then
-                BOOT_TARGET="$(tr -d '[:space:]' < /run/boot-selector/mnt/.boot_target)"
-                echo "boot-selector: flag file on ${USERDATA_DEV} → '${BOOT_TARGET}'" >$CONSOLE
+                BOOT_TARGET="$(tr -d '[:space:]' \
+                    </run/boot-selector/mnt/.boot_target)"
+                echo "boot-selector: flag file on ${USERDATA_DEV} \
+→ '${BOOT_TARGET}'" >$CONSOLE
             fi
             umount /run/boot-selector/mnt 2>/dev/null || true
         fi
@@ -90,11 +108,12 @@ BOOT_TARGET="${BOOT_TARGET:-linux}"
 
 echo "boot-selector: target = ${BOOT_TARGET}" >$CONSOLE
 
-# ── dispatch ─────────────────────────────────────────────────────────────────
+# ── dispatch ──────────────────────────────────────────────────────────────────
 TARGET_SCRIPT="/boot-targets/${BOOT_TARGET}.sh"
 
 if [ ! -f "$TARGET_SCRIPT" ]; then
-    echo "boot-selector: unknown target '${BOOT_TARGET}' – falling back to linux" >$CONSOLE
+    echo "boot-selector: unknown target '${BOOT_TARGET}' – falling back to \
+linux" >$CONSOLE
     TARGET_SCRIPT="/boot-targets/linux.sh"
 fi
 
