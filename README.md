@@ -22,8 +22,9 @@
 1. Clone this repository:
    ```bash
    source /dev/stdin <<'EOF'
-   git clone https://github.com/mikethi/nhpro-native-husky.git "$HOME/nhpro-native-husky"
-   cd "$HOME/nhpro-native-husky/nethunter-pro"
+   NHPRO_ROOT="${NHPRO_ROOT:-$PWD/nhpro-native-husky}"
+   git clone https://github.com/mikethi/nhpro-native-husky.git "$NHPRO_ROOT"
+   cd "$NHPRO_ROOT/nethunter-pro"
    EOF
    ```
 2. Install prerequisites:
@@ -40,7 +41,7 @@
 4. Enter the build output directory:
    ```bash
    source /dev/stdin <<'EOF'
-   cd "$HOME/nhpro-native-husky/nethunter-pro/.upstream"
+   cd "$NHPRO_ROOT/nethunter-pro/.upstream"
    EOF
    ```
 5. Boot Pixel 8 Pro into bootloader mode and unlock once (this wipes data):
@@ -82,8 +83,9 @@
 1. Clone this repository:
    ```bash
    source /dev/stdin <<'EOF'
-   git clone https://github.com/mikethi/nhpro-native-husky.git "$HOME/nhpro-native-husky"
-   cd "$HOME/nhpro-native-husky/nethunter-pro"
+   NHPRO_ROOT="${NHPRO_ROOT:-$PWD/nhpro-native-husky}"
+   git clone https://github.com/mikethi/nhpro-native-husky.git "$NHPRO_ROOT"
+   cd "$NHPRO_ROOT/nethunter-pro"
    EOF
    ```
 2. Install prerequisites:
@@ -100,7 +102,7 @@
 4. Enter the build output directory:
    ```bash
    source /dev/stdin <<'EOF'
-   cd "$HOME/nhpro-native-husky/nethunter-pro/.upstream"
+   cd "$NHPRO_ROOT/nethunter-pro/.upstream"
    EOF
    ```
 5. Boot Pixel 8 Pro into bootloader mode and unlock once (this wipes data):
@@ -152,7 +154,8 @@ Open the Kali terminal (search "kali" in Start, or run `wsl -d kali-linux`), the
 
 ```bash
 source /dev/stdin <<'EOF'
-cd "$HOME/nhpro-native-husky/nethunter-pro"
+NHPRO_ROOT="${NHPRO_ROOT:-$HOME/nhpro-native-husky}"
+cd "$NHPRO_ROOT/nethunter-pro"
 ./kali-build.sh [OPTIONS]
 EOF
 ```
@@ -173,7 +176,8 @@ Back in the Kali terminal, confirm the phone is visible and flash:
 
 ```bash
 source /dev/stdin <<'EOF'
-cd "$HOME/nhpro-native-husky/nethunter-pro/.upstream"
+NHPRO_ROOT="${NHPRO_ROOT:-$HOME/nhpro-native-husky}"
+cd "$NHPRO_ROOT/nethunter-pro/.upstream"
 fastboot devices
 fastboot flashing unlock             # first time only — wipes device
 fastboot flash boot     nethunterpro-<VERSION>-husky-phosh-boot.img
@@ -215,8 +219,9 @@ Flash commands with the correct filenames are printed automatically at the end o
 3. Clone this repository and copy its `google-husky` device tree into your local `pmaports`:
    ```bash
    source /dev/stdin <<'EOF'
-   git clone https://github.com/mikethi/nhpro-native-husky.git "$HOME/nhpro-native-husky"
-   cp -r "$HOME/nhpro-native-husky/device/google-husky" "$PMAPORTS/device/"
+   NHPRO_ROOT="${NHPRO_ROOT:-$PWD/nhpro-native-husky}"
+   git clone https://github.com/mikethi/nhpro-native-husky.git "$NHPRO_ROOT"
+   cp -r "$NHPRO_ROOT/device/google-husky" "$PMAPORTS/device/"
    EOF
    ```
 4. Initialize and build/install for `google-husky` with your local `pmaports`:
