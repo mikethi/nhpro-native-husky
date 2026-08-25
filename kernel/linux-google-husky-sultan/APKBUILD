@@ -22,6 +22,24 @@ makedepends="
 	linux-headers
 	openssl-dev
 	perl
+	bison
+	clang
+	findutils
+	flex
+	lld
+	llvm
+	lz4
+	openssl-dev
+	perl
+	zstd
+	clang-dev
+	rust
+	rust-bindgen
+	rust-src
+	rustfmt
+	rust-clippy
+	dwarf-tools
+
 "
 
 # Sultan kernel source: tag 16.0.0-sultan from kerneltoast/android_kernel_google_zuma
