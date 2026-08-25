@@ -1,81 +1,291 @@
-# Google Pixel 8 Pro (husky) – udev firmware rules
+# Google Pixel 8 Pro (husky) – comprehensive udev firmware rules
 # SoC: Google Tensor G3 (zuma / Exynos GS301)
+# DTS source: device/google-husky/husky.dts
+# DTB compiled: device/google-husky/husky.dtb
+#
 # No HAL: all firmware is loaded directly by kernel drivers via request_firmware().
-# Bare-metal addresses match husky.dts (UART 0x10870000, GIC 0x10400000).
+# Bare-metal addresses validated against husky.dts reserved-memory and peripherals.
+
+# ---------------------------------------------------------------------------
+# System Initialization – Early Boot (must complete before userspace)
+# ---------------------------------------------------------------------------
+
+# Interrupt Controller (ARM GIC-600): must be initialized first
+# GICD base: 0x10400000 (from husky.dts line 136-142)
+# GICR base: 0x10440000 (redistributor stride 0x20000)
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="gic-v3", \
+    RUN{builtin}+="kmod load irq_gic_v3" \
+    ENV{DEVTYPE}="gic_controller"
+
+# Clock Controller (Samsung Exynos Zuma)
+# Base: 0x10800000, size 0x800000 (from husky.dts line 230)
+# Module: clk_exynos_zuma
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="exynos-clock", \
+    RUN{builtin}+="kmod load clk_exynos_zuma" \
+    ENV{DEVTYPE}="clock_ctrl"
+
+# ---------------------------------------------------------------------------
+# Power Management ICs (S2MPG14 / S2MPG15)
+# Cluster 0 (Klein cores): S2MPG14 @ IRQ 0x2a4 (676)
+# Cluster 1 (Makalu cores): S2MPG15 @ IRQ 0x2a5 (677)
+# Required for CPU frequency scaling and voltage regulation
+# ---------------------------------------------------------------------------
+
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="s2mpg1[45]", \
+    RUN{builtin}+="kmod load s2mpg14_core" \
+    RUN{builtin}+="kmod load s2mpg15_core" \
+    RUN{builtin}+="kmod load s2mpg14_regulator" \
+    RUN{builtin}+="kmod load s2mpg15_regulator"
+
+# ---------------------------------------------------------------------------
+# CPU / PSCI Power State Coordination (ARM PSCI v1.0)
+# Method: SMC (Secure Monitor Call)
+# CPU Idle State: PSCI 0x10000 (CPU_SUSPEND)
+# ---------------------------------------------------------------------------
+
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="psci", \
+    ENV{DEVTYPE}="cpu_state_manager"
+
+# ---------------------------------------------------------------------------
+# Storage – UFS (exynos-ufs)
+# CRITICAL: must load before root filesystem access
+# Gear: UFS HS Gear 4, Lanes: 2 (from husky-modprobe.conf)
+# ---------------------------------------------------------------------------
+
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="exynos-ufs", \
+    RUN{builtin}+="kmod load ufs_exynos" \
+    ENV{DEVTYPE}="storage_controller"
+
+# ---------------------------------------------------------------------------
+# Display – DRM/KMS (no gralloc HAL)
+# Panel: Samsung s6e3hc4 (1344×2992 LTPO OLED, 120 Hz)
+# DSI Controller: Samsung MIPI-DSI (samsung_dsim)
+# DRM master: exynos_drm
+# ---------------------------------------------------------------------------
+
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="exynos-drm", \
+    RUN{builtin}+="kmod load exynos_drm"
+
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="samsung-dsim", \
+    RUN{builtin}+="kmod load samsung_dsim"
+
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="samsung,s6e3hc4", \
+    RUN{builtin}+="kmod load panel_samsung_s6e3hc4"
+
+# ---------------------------------------------------------------------------
+# GPU – ARM Mali-T6xx (Imagination PowerVR BXM-8-256)
+# Base: 0x1f000000, size 0x480000 (from husky.dts line 509-513)
+# Firmware: /lib/firmware/pvr/rogue.fw
+# Interrupts: JOB (0x15b), MMU (0x15c), GPU (0x15a)
+# Power domains: top + cores (dual domain)
+# ---------------------------------------------------------------------------
+
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="pvrsrvkm", \
+    RUN{builtin}+="kmod load pvrsrvkm" \
+    ENV{FW_SEARCH_PATH}="/lib/firmware/pvr/" \
+    ENV{DEVTYPE}="gpu"
 
 # ---------------------------------------------------------------------------
 # Samsung SCSC WiFi/BT combo (S5400, mx140 firmware)
-# Firmware path: /lib/firmware/scsc/mx140/
+# WiFi firmware path: /lib/firmware/scsc/mx140/
+# Bluetooth: same mx140 firmware image as WiFi
+# Driver uses firmware_variant=mx140 (from modprobe.conf)
 # ---------------------------------------------------------------------------
-ACTION=="add", SUBSYSTEM=="platform", DRIVER=="scsc_wlan", \
-    RUN{builtin}+="kmod load scsc_wlan"
-ACTION=="add", SUBSYSTEM=="platform", DRIVER=="scsc_bt", \
-    RUN{builtin}+="kmod load scsc_bt"
 
-# ---------------------------------------------------------------------------
-# Imagination PowerVR BXM-8-256 GPU (pvrsrvkm)
-# Firmware path: /lib/firmware/pvr/
-# Used directly via DRM/KMS – no gralloc HAL.
-# ---------------------------------------------------------------------------
-ACTION=="add", SUBSYSTEM=="platform", DRIVER=="pvrsrvkm", \
-    RUN{builtin}+="kmod load pvrsrvkm"
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="scsc_wlan", \
+    RUN{builtin}+="kmod load scsc_wlan" \
+    ENV{FW_SEARCH_PATH}="/lib/firmware/scsc/" \
+    ENV{DEVTYPE}="wlan_adapter"
+
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="scsc_bt", \
+    RUN{builtin}+="kmod load scsc_bt" \
+    ENV{FW_SEARCH_PATH}="/lib/firmware/scsc/" \
+    ENV{DEVTYPE}="bluetooth_adapter"
 
 # ---------------------------------------------------------------------------
 # Samsung ABOX audio DSP
-# Accessed via ALSA/ASoC directly – no AudioFlinger HAL.
+# Accessed via ALSA/ASoC directly – no AudioFlinger HAL
+# Firmware: /lib/firmware/abox/abox.bin (from modprobe.conf)
+# GIC controller base: 0x10400000 (passed to driver)
 # ---------------------------------------------------------------------------
+
 ACTION=="add", SUBSYSTEM=="platform", DRIVER=="samsung-abox", \
-    RUN{builtin}+="kmod load snd_soc_samsung_abox"
+    RUN{builtin}+="kmod load snd_soc_samsung_abox" \
+    ENV{FW_SEARCH_PATH}="/lib/firmware/abox/"
+
 ACTION=="add", SUBSYSTEM=="platform", DRIVER=="samsung-abox-gic", \
     RUN{builtin}+="kmod load snd_soc_samsung_abox_gic"
 
+# Codec driver
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="cs35l45", \
+    RUN{builtin}+="kmod load snd_soc_cs35l45"
+
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="wm_adsp", \
+    RUN{builtin}+="kmod load snd_soc_wm_adsp"
+
 # ---------------------------------------------------------------------------
-# Shannon cellular modem IPC
-# Accessed via ModemManager / ofono – no RIL HAL.
+# Shannon cellular modem (modem_if / cpif)
+# Memory regions: cp_rmem (0xea400000), cp_rmem_1 (0xe8000000),
+#                 cp_msi_rmem (0xf6200000), cp_aoc_rmem (0x197fd000)
+# Accessed via ModemManager / ofono – no RIL HAL
+# Driver uses force_use_s5100=1 (from modprobe.conf)
 # ---------------------------------------------------------------------------
+
 ACTION=="add", SUBSYSTEM=="platform", DRIVER=="modem_if", \
-    RUN{builtin}+="kmod load modem_if"
+    RUN{builtin}+="kmod load modem_if" \
+    ENV{DEVTYPE}="modem_controller"
+
 ACTION=="add", SUBSYSTEM=="platform", DRIVER=="cpif", \
-    RUN{builtin}+="kmod load cpif"
+    RUN{builtin}+="kmod load cpif" \
+    ENV{DEVTYPE}="modem_ipc"
 
 # ---------------------------------------------------------------------------
 # Samsung Pablo ISP (camera)
-# Accessed via V4L2 directly – no camera HAL.
+# ICPU: pablo-icpu firmware @ 0x? (ISP instruction processor)
+# Sensors: is-sensor / is_core
+# Accessed via V4L2 directly – no camera HAL
 # ---------------------------------------------------------------------------
+
 ACTION=="add", SUBSYSTEM=="platform", DRIVER=="pablo-icpu", \
-    RUN{builtin}+="kmod load pablo_icpu"
+    RUN{builtin}+="kmod load pablo_icpu" \
+    ENV{DEVTYPE}="camera_processor"
+
 ACTION=="add", SUBSYSTEM=="platform", DRIVER=="is-sensor", \
     RUN{builtin}+="kmod load is_sensor_module"
 
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="is-core", \
+    RUN{builtin}+="kmod load is_core"
+
 # ---------------------------------------------------------------------------
 # Google/Samsung NPU (EdgeTPU / Tensor Processing Unit)
+# GXP firmware: /lib/firmware/gxp/ (reserved @ 0x91d00000, size 0x300000)
+# GXP MCU firmware: reserved @ 0x92000000, size 0x400000
+# TPU firmware: /lib/firmware/tpu/ (reserved @ 0x93000000, size 0x1000000)
 # ---------------------------------------------------------------------------
+
 ACTION=="add", SUBSYSTEM=="platform", DRIVER=="abrolhos", \
-    RUN{builtin}+="kmod load abrolhos"
+    RUN{builtin}+="kmod load abrolhos" \
+    ENV{FW_SEARCH_PATH}="/lib/firmware/tpu/" \
+    ENV{DEVTYPE}="tpu_accelerator"
+
 ACTION=="add", SUBSYSTEM=="platform", DRIVER=="exynos-npu", \
-    RUN{builtin}+="kmod load exynos_npu"
+    RUN{builtin}+="kmod load exynos_npu" \
+    ENV{FW_SEARCH_PATH}="/lib/firmware/gxp/" \
+    ENV{DEVTYPE}="npu_accelerator"
 
 # ---------------------------------------------------------------------------
 # Samsung SEC touchscreen (sec_ts)
-# Input events exposed via /dev/input – no touch HAL.
+# I2C device on GPA6 GPIO (IRQ type 8 = LEVEL_LOW)
+# Input events exposed via /dev/input – no touch HAL
 # ---------------------------------------------------------------------------
+
 ACTION=="add", SUBSYSTEM=="i2c", DRIVER=="sec_ts", \
-    RUN{builtin}+="kmod load sec_ts"
+    RUN{builtin}+="kmod load sec_ts" \
+    ENV{DEVTYPE}="touchscreen"
 
 # ---------------------------------------------------------------------------
-# USB-C / DWC3 + Exynos USB PHY
+# GPIO keys (Power, Volume-up, Volume-down)
+# Matches gpio-keys node in husky.dts (GPA4/GPA6)
+# Input events via /dev/input/eventX
 # ---------------------------------------------------------------------------
+
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="gpio-keys", \
+    RUN{builtin}+="kmod load gpio_keys" \
+    ENV{DEVTYPE}="input_device"
+
+# ---------------------------------------------------------------------------
+# USB-C (DWC3 + Exynos USB PHY)
+# Controller base: 0x1e100000 (from husky.dts)
+# PHY: exynos_usbdrd (Exynos USB3 dual-role)
+# Mode: OTG (Device + Host capable)
+# DMA pools: xhci_dma (0x17bc0000), xhci_dma_dram (0x97000000)
+# ---------------------------------------------------------------------------
+
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="dwc3", \
+    RUN{builtin}+="kmod load dwc3" \
+    ENV{DEVTYPE}="usb_controller"
+
 ACTION=="add", SUBSYSTEM=="platform", DRIVER=="exynos-dwusb", \
     RUN{builtin}+="kmod load dwc3_exynos"
 
-# ---------------------------------------------------------------------------
-# Samsung Exynos Thermal Management Unit
-# ---------------------------------------------------------------------------
-ACTION=="add", SUBSYSTEM=="platform", DRIVER=="exynos-tmu", \
-    RUN{builtin}+="kmod load exynos_tmu"
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="exynos-usbdrd", \
+    RUN{builtin}+="kmod load phy_exynos_usbdrd" \
+    ENV{DEVTYPE}="usb_phy"
 
 # ---------------------------------------------------------------------------
-# UFS storage (exynos-ufs)
+# Thermal Management Unit (Exynos TMU)
+# Polling interval: 1000 ms (from modprobe.conf)
+# Temperature sensor and frequency throttling
 # ---------------------------------------------------------------------------
-ACTION=="add", SUBSYSTEM=="platform", DRIVER=="exynos-ufs", \
-    RUN{builtin}+="kmod load ufs_exynos"
+
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="exynos-tmu", \
+    RUN{builtin}+="kmod load exynos_tmu" \
+    ENV{DEVTYPE}="thermal_manager"
+
+# ---------------------------------------------------------------------------
+# Vibrator / Haptics (TI DRV2624)
+# I2C device, haptic feedback IC
+# ---------------------------------------------------------------------------
+
+ACTION=="add", SUBSYSTEM=="i2c", DRIVER=="drv2624", \
+    RUN{builtin}+="kmod load drv2624" \
+    ENV{DEVTYPE}="haptic_device"
+
+# ---------------------------------------------------------------------------
+# NFC (STMicroelectronics ST21NFC)
+# SPI/I2C device
+# ---------------------------------------------------------------------------
+
+ACTION=="add", SUBSYSTEM=="spi|i2c", DRIVER=="st21nfc", \
+    RUN{builtin}+="kmod load st21nfc" \
+    ENV{DEVTYPE}="nfc_device"
+
+# ---------------------------------------------------------------------------
+# Trusty TEE (Google Trusted Execution Environment)
+# SMC-based secure services
+# DMA heaps: vframe (512 MB), vstream, vscaler, tui (24 MB), etc.
+# Protection IDs: 0x00–0x20
+# Initialized early by kernel, but userspace may defer TEE access
+# ---------------------------------------------------------------------------
+
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="android-trusty", \
+    ENV{DEVTYPE}="secure_monitor"
+
+# ---------------------------------------------------------------------------
+# PSCI-based CPU sleep states (klein-cpu-sleep, makalu-cpu-sleep, etc.)
+# Handled by cpuidle driver; rules enforce module preload
+# ---------------------------------------------------------------------------
+
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="arm-cpuidle", \
+    RUN{builtin}+="kmod load cpuidle" \
+    ENV{DEVTYPE}="cpu_power_mgmt"
+
+# ---------------------------------------------------------------------------
+# BigWave Video Processor (Google VPU @ 0x1a700000)
+# OPP table: 4 frequencies (100–711 MHz)
+# Bandwidth table: 1080p/2160p @ 30/60 fps
+# ---------------------------------------------------------------------------
+
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="google-bigwave", \
+    RUN{builtin}+="kmod load bigwave" \
+    ENV{DEVTYPE}="video_processor"
+
+# ---------------------------------------------------------------------------
+# UART Console (Samsung Exynos serial @ 0x10870000)
+# Early console: earlycon=exynos4210,mmio32,0x10870000
+# Device: /dev/ttySAC0, baud 115200n8
+# Clock rate: 26 MHz (from modprobe.conf)
+# ---------------------------------------------------------------------------
+
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="samsung-serial", \
+    RUN{builtin}+="kmod load samsung_serial" \
+    ENV{DEVTYPE}="serial_console"
+
+# ---------------------------------------------------------------------------
+# Energy Model (Pixel EM) – EAS Scheduler Support
+# Per-CPU energy coefficients for task placement and thermal throttling
+# Used by Linux scheduler (EAS) and cpufreq governor
+# ---------------------------------------------------------------------------
+
+ACTION=="add", SUBSYSTEM=="platform", DRIVER=="pixel-em", \
+    ENV{DEVTYPE}="energy_model"
